@@ -27,7 +27,7 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application code
 COPY clawforge/ ./clawforge/
 COPY configs/ ./configs/
-COPY strategies/ ./strategies/ 2>/dev/null || true
+COPY strategies/ ./strategies/
 
 # Create directories for data
 RUN mkdir -p /app/user_data/logs /app/user_data/strategies /app/generated/cards

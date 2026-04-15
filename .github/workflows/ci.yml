@@ -107,11 +107,8 @@ jobs:
 
       - name: CodeRabbit Review
         uses: coderabbitai/ai-pr-reviewer@latest
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          OPENAI_API_KEY: ${{ secrets.CODERABBIT_API_KEY }}
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           openai_api_key: ${{ secrets.CODERABBIT_API_KEY }}
           review_simple_changes: true
           aws_access_key_id: ${{ secrets.AWS_ACCESS_KEY_ID }}
