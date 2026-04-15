@@ -1,43 +1,44 @@
-# ============================================
-# Claw_Rise_bot — Dockerfile (single-stage, explicit copy)
-# ============================================
+# Multi-stage Docker build for ClawForge
+FROM python:3.11-slim AS builder
 
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    git \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Freqtrade and dependencies
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Runtime stage
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# System deps for building Python packages
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    curl \
-    git \
-    libssl-dev \
-    libffi-dev \
-    libatlas-base-dev \
-    && rm -rf /var/lib/apt/lists/*
+# Copy Python packages from builder
+COPY --from=builder /usr/local/lib/python3.11/site-packages /usr/local/lib/python3.11/site-packages
+COPY --from=builder /usr/local/bin /usr/local/bin
 
-# Upgrade pip
-RUN pip install --upgrade pip
+# Copy application code
+COPY clawforge/ ./clawforge/
+COPY configs/ ./configs/
+COPY strategies/ ./strategies/ 2>/dev/null || true
 
-# Copy requirements first (for layer caching)
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Create directories for data
+RUN mkdir -p /app/user_data/logs /app/user_data/strategies /app/generated/cards
 
-# Copy source code explicitly
-COPY src ./src
-COPY config ./config
-COPY web ./web
-COPY scripts ./scripts
-COPY data ./data
-COPY logs ./logs
-COPY generated-cards ./generated-cards
-COPY *.md *.yaml *.yml ./
+# Environment
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1
 
-# Ensure runtime dirs exist (if not already)
-RUN mkdir -p data/logs data/candles generated-cards logs
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
+    CMD python -c "import requests; requests.get('http://localhost:8080/api/v1/ping', timeout=5)" || exit 1
 
-# Expose health endpoint
-EXPOSE 8080
-
-# Default command (overridden by docker-compose if needed)
-CMD ["python", "-m", "src.bot.executor"]
+# Entrypoint
+CMD ["freqtrade", "trade", "--config", "/app/configs/config.json"]

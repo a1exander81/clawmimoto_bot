@@ -1,43 +1,39 @@
-# CodeRabbit Configuration for Claw_Rise_bot
+# CodeRabbit Configuration
 # https://coderabbit.ai
 
 review:
   auto_title: true
-  auto_approvals: false  # Manual approval required before merge
+  auto_approvals: false  # Manual approval still required
   comments:
-    require_changes: false  # Can approve if no changes needed
+    require_changes: false  # Can approve without changes
   labels:
     - "ai-reviewed"
-    - "trading-bot"
   ignore:
     - "*.md"
     - "*.json"
     - ".env*"
     - "Dockerfile"
-    - "docker-compose*.yml"
-    - "requirements.txt"
-    - "scripts/*"
+    - "docker-compose.yml"
 
 bot:
-  ignore_minor: true  # Skip trivial formatting changes
+  # Don't review trivial changes
+  ignore_minor: true
+  # Include security scanning
   security_scan: true
+  # Summarize changes
   summary: true
 
+# PR Review Instructions
 instructions: |
-  Review this PR for Claw_Rise_bot — a 5M crypto scalper on BingX.
-  
-  CRITICAL CHECKS:
-  1. Risk management: verify stoploss, trailing, position sizing logic
-  2. API key handling: ensure no secrets hardcoded or logged
-  3. Telegram UX: maintain 0-Type (no typing) consistency
-  4. BingX API: correct endpoint usage, rate limit handling, error recovery
-  5. No breaking changes to config schema (.env structure)
-  
+  Review this PR for ClawForge trading bot.
+  Focus on:
+  - Risk management correctness (stoploss, trailing, position sizing)
+  - API key handling (no secrets in code)
+  - Telegram UX (0-Type UI consistency)
+  - BingX API usage (rate limits, error handling)
+  - No breaking changes to config schema
+
   Flag any:
-  - Hardcoded values that should be configurable
-  - Missing error handling (especially network/API calls)
-  - Race conditions in trade execution or state updates
-  - Changes to risk parameters that could increase exposure
-  - Logging that might leak sensitive data
-  
-  This bot trades real money. Review accordingly.
+  - Hardcoded values that should be config
+  - Missing error handling
+  - Potential race conditions in trade execution

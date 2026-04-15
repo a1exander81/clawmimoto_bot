@@ -1,0 +1,51 @@
+{
+  "version": 3,
+  "bot_name": "ClawForge",
+  "max_open_trades": 3,
+  "timeframe": "5m",
+  "dry_run": true,
+  "dry_run_wallet": 10000,
+  "fiat_display_currency": "USD",
+  "stake_currency": "USDT",
+  "stake_amount": 100,
+  "exchange": {
+    "name": "bingx",
+    "key": "${BINGX_API_KEY}",
+    "secret": "${BINGX_API_SECRET}",
+    "ccxt_config": {},
+    "ccxt_async_config": {},
+    "pair_whitelist": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+  },
+  "pairlists": [
+    {
+      "method": "StaticPairList"
+    }
+  ],
+  "pair_blacklist": ["USDT/USDT"],
+  "telegram": {
+    "enabled": false,
+    "token": "${TELEGRAM_BOT_TOKEN}",
+    "chat_id": "${TELEGRAM_CHAT_ID}"
+  },
+  "entry_pricing": {
+    "use_order_book": false,
+    "price_last_balance": 0.0
+  },
+  "exit_pricing": {
+    "use_order_book": false,
+    "price_last_balance": 0.0
+  },
+  "api_server": {
+    "enabled": true,
+    "listen_ip_address": "127.0.0.1",
+    "listen_port": 8080,
+    "username": "admin",
+    "password": "admin",
+    "jwt_secret_key": "somethingRandomSomethingRandom123"
+  },
+  "logfile": "logs/clawforge.log",
+  "user_data_dir": "user_data",
+  "strategy": "Claw5MSniper",
+  "strategy_path": "strategies",
+  "initial_state": "running"
+}
