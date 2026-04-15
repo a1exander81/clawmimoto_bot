@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-REPO_DIR="/data/.openclaw/workspace/claw-rise-bot"
+REPO_DIR="/data/.openclaw/workspace/clawforge-repo"
 cd "$REPO_DIR"
 
 # Initialize git if not already
@@ -14,7 +14,7 @@ fi
 # Ensure we have a main branch (create initial commit if no commits)
 if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
   git add -A
-  git commit -m "Initial commit - ClawRise trading bot"
+  git commit -m "Initial commit - ClawForge trading engine"
   git branch -M main
 fi
 

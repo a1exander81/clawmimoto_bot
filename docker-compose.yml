@@ -1,49 +1,38 @@
 version: '3.8'
 
 services:
-  bot:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    container_name: claw-rise-bot
+  clawforge:
+    build: .
+    container_name: clawforge
     restart: unless-stopped
-    env_file:
-      - .env
+    mem_limit: 1g
+    cpus: '1.0'
+    networks:
+      - claw-isolation
     volumes:
-      - ./data:/app/data
-      - ./logs:/app/logs
-      - ./generated-cards:/app/generated-cards
-    ports:
-      - "8080:8080"  # health endpoint
-    depends_on:
-      - redis
-    command: >
-      sh -c "
-        python -m src.health.monitor &
-        python -m src.bot.executor
-      "
+      - ./user_data:/app/user_data
+      - ./configs:/app/configs:ro
+      - ./strategies:/app/strategies:ro
+      - ./generated:/app/generated
+    environment:
+      - BINGX_API_KEY=${BINGX_API_KEY}
+      - BINGX_API_SECRET=${BINGX_API_SECRET}
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_CHAT_ID=${TELEGRAM_CHAT_ID}
+      - STEPFUN_API_KEY=${STEPFUN_API_KEY}
+      - TZ=Asia/Singapore
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import freqtrade; print('OK')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
 
-  webui:
-    build:
-      context: .
-      dockerfile: web/Dockerfile
-    container_name: claw-rise-webui
-    restart: unless-stopped
-    ports:
-      - "8000:8000"
-    volumes:
-      - ./data:/app/data
-    depends_on:
-      - bot
-
-  redis:
-    image: redis:7-alpine
-    container_name: claw-rise-redis
-    restart: unless-stopped
-    volumes:
-      - redis_data:/data
-    ports:
-      - "6379:6379"
-
-volumes:
-  redis_data:
+networks:
+  claw-isolation:
+    driver: bridge

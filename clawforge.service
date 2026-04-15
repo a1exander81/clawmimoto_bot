@@ -1,0 +1,16 @@
+[Unit]
+Description=ClawForge Trading Bot (Freqtrade)
+After=network.target
+
+[Service]
+Type=simple
+User=node
+Group=node
+WorkingDirectory=/data/.openclaw/workspace/clawforge-repo
+EnvironmentFile=/data/.openclaw/workspace/clawforge-repo/.env
+ExecStart=/usr/bin/python3 -m freqtrade trade --dry-run --config configs/config.json --config configs/config.local.json --strategy Claw5MSniper
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

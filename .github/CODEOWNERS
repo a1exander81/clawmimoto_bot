@@ -1,0 +1,27 @@
+# Code Owners — Automatic PR reviewers
+# https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Core trading engine / strategy files
+/clawforge/strategy.py @Rentardio
+/clawforge/bot.py @Rentardio
+
+# Telegram UI
+/clawforge/telegram.py @Rentardio
+
+# Integrations (StepFun, meme, etc.)
+/clawforge/integrations/ @Rentardio
+
+# Configs
+/configs/ @Rentardio
+
+# Tests
+/tests/ @Rentardio
+
+# CI/CD & DevOps
+/.github/workflows/ @Rentardio
+/docker-compose.yml @Rentardio
+/Dockerfile @Rentardio
+/deploy/ @Rentardio
+
+# Everything else defaults to main maintainer
+* @Rentardio
