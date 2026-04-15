@@ -107,6 +107,7 @@ jobs:
 
       - name: CodeRabbit Review
         uses: coderabbitai/ai-pr-reviewer@latest
+        continue-on-error: true
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           openai_api_key: ${{ secrets.CODERABBIT_API_KEY }}
