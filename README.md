@@ -1,4 +1,4 @@
-# ClawForge Engine — Institutional 5M Crypto Trading Bot
+# CLAW TRADE — Institutional 5M Crypto Trading Bot
 
 **Telegram-native, ISOLATED margin, 3 trades/day max, $CLUSDT mock ledger.**
 
@@ -97,5 +97,5 @@ Proprietary — ClawForge empire codebase.
 
 ---
 
-**Built with ❤️ by Zion for Rentardio.**  
+**Built with ❤️ by Open Claw  for @Rentardio .**  
 *Protecting capital first, building the empire second.*
