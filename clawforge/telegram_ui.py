@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-ClawTrader Telegram UI — Revised per user specs
+Clawmimoto Telegram UI — Revised per user specs
 Main Menu with news, BalRealMoc, ModeReal, wins, Gains
 SESSION: 2x2 grid with leverage/margin controls, AI scan, pair details
 POSITIONS: list with share PNL
@@ -12,7 +12,11 @@ import base64
 import hashlib
 import hmac
 import requests
+import asyncio
+import threading
+from datetime import datetime, timezone
 from pathlib import Path
+import feedparser
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
@@ -79,6 +83,37 @@ def bingx_signed_request(method, endpoint, params=None):
         logger.error(f"BingX API error: {e}")
         return None
 
+
+# ── Multi-Exchange Ticker Fetchers ──
+def get_binance_ticker(symbol):
+    """Fetch ticker from Binance public API (no auth). Symbol format: BTCUSDT."""
+    try:
+        r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}", timeout=5)
+        if r.status_code == 200:
+            d = r.json()
+            price = float(d.get("lastPrice", 0))
+            change = float(d.get("priceChangePercent", 0))
+            return price, change
+    except Exception as e:
+        logger.debug(f"Binance ticker error for {symbol}: {e}")
+    return None, None
+
+def get_okx_ticker(symbol):
+    """Fetch ticker from OKX public API (no auth). Symbol format: BTC-USDT."""
+    try:
+        r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={symbol}", timeout=5)
+        if r.status_code == 200:
+            d = r.json()
+            if d.get("code") == "0" and d.get("data"):
+                data = d["data"][0]
+                price = float(data.get("last", 0))
+                # OKX returns 24h change as a string percentage
+                change = float(data.get("change24h", 0))
+                return price, change
+    except Exception as e:
+        logger.debug(f"OKX ticker error for {symbol}: {e}")
+    return None, None
+
 # ── Balance: BalRealMoc ──
 def get_balance():
     """Return (real_balance, mock_balance)"""
@@ -120,18 +155,6 @@ def format_gains():
     _, _, _, pnl = get_stats()
     pnl_pct = (pnl / 10000 * 100) if pnl else 0  # based on $10k initial
     return f"{pnl_pct:+.1f}% ${pnl:,.2f}"
-
-# ── News fetch (dummy for now — replace with real RSS/API) ──
-def get_market_news():
-    """Return 4+ line market narrative. Placeholder — integrate news API later."""
-    # TODO: fetch from RSS, NewsAPI, or StepFun summary
-    return (
-        "📢 Market Pulse — April 15, 2026\n\n"
-        "• Trump announces new crypto-friendly tax policy, markets rally.\n"
-        "• Bitcoin breaks $71k resistance, ETH2.0 staking inflows surge.\n"
-        "• Solana network outage resolved, price volatility expected.\n"
-        "• Fed Chair hints at pause, gold steady at $2,340/oz."
-    )
 
 # ── AI Scan ──
 def call_stepfun_skill(prompt):
@@ -248,8 +271,9 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [wins_button(), gains_button()],
         [InlineKeyboardButton("📈 TRADE MENU", callback_data="trade_menu")],
         [InlineKeyboardButton("📊 POSITIONS", callback_data="positions")],
+        [InlineKeyboardButton("📈 MARKET NOW", callback_data="market_now")],
     ]
-    await update.message.reply_text(f"🏠 **ClawTrader Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(f"🏠 **Clawmimoto Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -262,8 +286,9 @@ async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [wins_button(), gains_button()],
         [InlineKeyboardButton("📈 TRADE MENU", callback_data="trade_menu")],
         [InlineKeyboardButton("📊 POSITIONS", callback_data="positions")],
+        [InlineKeyboardButton("📈 MARKET NOW", callback_data="market_now")],
     ]
-    await q.edit_message_text(f"🏠 **ClawTrader Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb))
+    await q.edit_message_text(f"🏠 **Clawmimoto Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def toggle_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -298,6 +323,204 @@ async def show_gains_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pnl_pct = (pnl / 10000 * 100) if pnl else 0
     text = f"💰 **Realized Gains**\n\n{pnl_pct:+.1f}%\n${pnl:,.2f}"
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="main")]]))
+
+
+# ── Market Now ──
+
+# ── Market Snapshot Builder (used by button & cron job) ──
+def fetch_market_data():
+    pairs = [
+        ("BTC", "BTCUSDT", "BTCUSDT", "BTC-USDT", "bitcoin"),
+        ("ETH", "ETHUSDT", "ETHUSDT", "ETH-USDT", "ethereum"),
+        ("SOL", "SOLUSDT", "SOLUSDT", "SOL-USDT", "solana"),
+        ("BNB", "BNBUSDT", "BNBUSDT", "BNB-USDT", "binancecoin"),
+    ]
+    lines = []
+    sources = []
+    for label, bingx_sym, binance_sym, okx_sym, cg_id in pairs:
+        price, change, source = None, None, None
+        # BingX
+        try:
+            ticker = bingx_signed_request("GET", "/openApi/swap/v2/quote/ticker", {"symbol": bingx_sym})
+            if ticker and "data" in ticker:
+                d = ticker["data"]
+                price, change = float(d["lastPrice"]), float(d["priceChangePercent"])
+                source = "BingX"
+        except Exception:
+            pass
+        # Binance
+        if price is None:
+            price, change = get_binance_ticker(binance_sym)
+            if price:
+                source = "Binance"
+        # OKX
+        if price is None:
+            price, change = get_okx_ticker(okx_sym)
+            if price:
+                source = "OKX"
+        # CoinGecko
+        if price is None:
+            price, change = get_coingecko_ticker(cg_id)
+            if price:
+                source = "CoinGecko"
+        # Format
+        if price is not None:
+            lines.append(f"{label}: ${price:,.2f} ({change:+.2f}%)")
+            sources.append(source)
+        else:
+            lines.append(f"{label}: ERROR")
+    return "\n".join(lines), ", ".join(set(sources)) if sources else "None"
+
+def get_market_news():
+    """Fetch real crypto news from RSS feeds (no caching, no storage)."""
+    feeds = [
+        "https://cointelegraph.com/rss",
+        "https://feeds.coindesk.com/coindesk/bitcoin",
+        "https://decrypt.co/feed",
+        "https://theblock.co/feed",
+    ]
+    articles = []
+    for url in feeds:
+        try:
+            d = feedparser.parse(url)
+            if d.entries:
+                entry = d.entries[0]  # most recent from this feed
+                title = entry.get('title', '').strip()
+                link = entry.get('link', '').strip()
+                # Strip UTM tracking params from URL
+                if '?' in link and 'utm_' in link:
+                    link = link.split('?')[0]
+                if title and link:
+                    articles.append((title, link))
+        except Exception as e:
+            logger.debug(f"RSS fetch error from {url}: {e}")
+    # Deduplicate by title and limit to 4
+    seen = set()
+    uniq = []
+    for title, link in articles:
+        key = title.lower()
+        if key not in seen:
+            seen.add(key)
+            uniq.append((title, link))
+    uniq = uniq[:4]
+    
+    if not uniq:
+        # Fallback placeholder if all feeds fail
+        return (
+            "📢 *Market Pulse — " + datetime.now(timezone.utc).strftime("%b %d, %Y") + "*\n\n"
+            "• (News feeds temporarily unavailable — RSS error)\n"
+        )
+    
+    # Format: title + [Source](link) on same line
+    lines = [f"• {title} [Source]({link})" for title, link in uniq]
+    header = "📢 *Market Pulse — " + datetime.now(timezone.utc).strftime("%b %d, %Y") + "*"
+    return f"{header}\n\n" + "\n".join(lines)
+
+def generate_ta():
+    lines = []
+    for symbol in ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]:
+        try:
+            r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={symbol}", timeout=5)
+            if r.status_code == 200:
+                d = r.json()
+                high = float(d.get("highPrice", 0))
+                low = float(d.get("lowPrice", 0))
+                lines.append(f"{symbol.replace('USDT','')}: S${low:,.0f} | R${high:,.0f}")
+        except Exception:
+            pass
+    return "\n".join(lines) if lines else "TA unavailable"
+
+def build_market_snapshot():
+    market_prices, sources_used = fetch_market_data()
+    news = get_market_news()
+    ta = generate_ta()
+    utc_time = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return (
+        f"🚨 *BREAKING MARKET SNAPSHOT*\n"
+        f"📅 {utc_time}\n"
+        f"📊 Powered by: {sources_used}\n\n"
+        f"{news}\n\n"
+        f"📈 *Live Prices*\n{market_prices}\n\n"
+        f"📉 *Technical Levels*\n{ta}\n\n"
+        f"_Data sources: Multi-exchange fallback chain (BingX → Binance → OKX → CoinGecko)_"
+    )
+
+async def market_now_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    # Define pairs: (display_label, bingx_symbol, binance_symbol, okx_symbol, coingecko_id)
+    pairs = [
+        ("BTC", "BTCUSDT", "BTCUSDT", "BTC-USDT", "bitcoin"),
+        ("ETH", "ETHUSDT", "ETHUSDT", "ETH-USDT", "ethereum"),
+        ("SOL", "SOLUSDT", "SOLUSDT", "SOL-USDT", "solana"),
+        ("BNB", "BNBUSDT", "BNBUSDT", "BNB-USDT", "binancecoin"),
+    ]
+    message = "📈 Market Now\n\n"
+    sources = {"BingX": False, "Binance": False, "OKX": False, "CoinGecko": False}
+    for label, bingx_sym, binance_sym, okx_sym, cg_id in pairs:
+        price = None
+        change = None
+        source = None
+        # 1. Try BingX
+        try:
+            ticker = bingx_signed_request("GET", "/openApi/swap/v2/quote/ticker", {"symbol": bingx_sym})
+            if ticker and "data" in ticker:
+                d = ticker["data"]
+                price = float(d.get("lastPrice", 0))
+                change = float(d.get("priceChangePercent", 0))
+                source = "BingX"
+                sources["BingX"] = True
+        except Exception:
+            pass
+        # 2. Binance fallback
+        if price is None:
+            try:
+                r = requests.get(f"https://api.binance.com/api/v3/ticker/24hr?symbol={binance_sym}", timeout=5)
+                if r.status_code == 200:
+                    d = r.json()
+                    price = float(d.get("lastPrice", 0))
+                    change = float(d.get("priceChangePercent", 0))
+                    source = "Binance"
+                    sources["Binance"] = True
+            except Exception:
+                pass
+        # 3. OKX fallback
+        if price is None:
+            try:
+                r = requests.get(f"https://www.okx.com/api/v5/market/ticker?instId={okx_sym}", timeout=5)
+                if r.status_code == 200:
+                    d = r.json()
+                    if d.get("code") == "0" and d.get("data"):
+                        d = d["data"][0]
+                        price = float(d.get("last", 0))
+                        change = float(d.get("change24h", 0))
+                        source = "OKX"
+                        sources["OKX"] = True
+            except Exception:
+                pass
+        # 4. CoinGecko fallback (shared across all if all fail)
+        if price is None:
+            try:
+                r = requests.get(
+                    "https://api.coingecko.com/api/v3/simple/price",
+                    params={"ids": cg_id, "vs_currencies": "usd", "include_24hr_change": "true"},
+                    timeout=10,
+                )
+                if r.status_code == 200:
+                    d = r.json().get(cg_id, {})
+                    price = d.get("usd", 0)
+                    change = d.get("usd_24h_change", 0)
+                    source = "CoinGecko"
+                    sources["CoinGecko"] = True
+            except Exception:
+                pass
+        # Append result
+        if price is not None:
+            message += f"{label}: ${price:,.2f} ({change:+.2f}%) [{source}]\n"
+        else:
+            message += f"{label}: Error\n"
+    message += f"\n_Sources: {', '.join([k for k,v in sources.items() if v]) or 'None'}_"
+    await q.edit_message_text(message, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]), parse_mode="Markdown")
 
 # ── Trade Menu ──
 async def trade_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -599,9 +822,40 @@ def main():
     app.add_handler(CallbackQueryHandler(close_position_cb, pattern="^close_"))
     app.add_handler(CallbackQueryHandler(share_pnl_cb, pattern="^share_"))
     app.add_handler(CallbackQueryHandler(execute_cb, pattern="^execute$"))
+    app.add_handler(CallbackQueryHandler(market_now_cb, pattern="^market_now$"))
     app.add_handler(CallbackQueryHandler(confirm_exec_cb, pattern="^confirm_"))
     app.add_error_handler(error_handler)
-    logger.info("Starting ClawTrader Telegram UI...")
+    logger.info("Starting Clawmimoto Telegram UI...")
+    # Start background snapshot thread (every 4 hours)
+    def _snapshot_thread():
+        """Runs in separate thread; uses synchronous requests to Telegram API."""
+        import time
+        while True:
+            time.sleep(14400)  # 4 hours
+            try:
+                msg = build_market_snapshot()
+                token = TOKEN
+                chat_id = os.getenv("RIGHTCLAW_CHANNEL", "@RightclawTrade")
+                # Try channel first
+                url = f"https://api.telegram.org/bot{token}/sendMessage"
+                payload = {"chat_id": chat_id, "text": msg, "parse_mode": "Markdown", "disable_web_page_preview": True}
+                r = requests.post(url, json=payload, timeout=10)
+                if r.status_code == 200:
+                    logger.info(f"✅ Market snapshot sent to {chat_id}")
+                    continue
+                # Fallback to DM if channel fails (e.g., bot not in channel)
+                chat_id = os.getenv("TELEGRAM_CHAT_ID", "7093901111")
+                payload["chat_id"] = chat_id
+                r = requests.post(url, json=payload, timeout=10)
+                if r.status_code == 200:
+                    logger.info(f"✅ Market snapshot sent to DM {chat_id}")
+                else:
+                    logger.warning(f"Snapshot failed: {r.status_code} {r.text[:100]}")
+            except Exception as e:
+                logger.error(f"Snapshot thread error: {e}")
+    t = threading.Thread(target=_snapshot_thread, daemon=True)
+    t.start()
+
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
 if __name__ == "__main__":
