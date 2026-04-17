@@ -273,7 +273,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 POSITIONS", callback_data="positions")],
         [InlineKeyboardButton("📈 MARKET NOW", callback_data="market_now")],
     ]
-    await update.message.reply_text(f"🏠 **Clawmimoto Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb))
+    await update.message.reply_text(f"🏠 **Clawmimoto Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -288,7 +288,7 @@ async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 POSITIONS", callback_data="positions")],
         [InlineKeyboardButton("📈 MARKET NOW", callback_data="market_now")],
     ]
-    await q.edit_message_text(f"🏠 **Clawmimoto Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb))
+    await q.edit_message_text(f"🏠 **Clawmimoto Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def toggle_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
