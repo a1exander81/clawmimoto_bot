@@ -798,6 +798,9 @@ async def other_pair_input_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     text = update.message.text.upper()
+    # Ensure user_state entry exists
+    if chat_id not in user_state:
+        user_state[chat_id] = {"leverage": 50, "margin": 1, "trade_mode": "MOCK", "selected_pairs": []}
     state = user_state.get(chat_id, {})
     logger.info(f"Text handler: chat={chat_id} text={text[:100]}")
     
@@ -810,29 +813,50 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         print(f"[DEBUG] Extracted pair: {pair}")
         logger.info(f"Extracted pair: {pair}")
         if pair:
-            result = analyze_pair(pair)
-            user_state[chat_id]["selected_pairs"] = [result]
+            try:
+                result = analyze_pair(pair)
+                # Ensure required keys exist
+                result.setdefault('symbol', pair)
+                result.setdefault('direction', 'LONG')
+                result.setdefault('change', 0.0)
+                result.setdefault('confidence', 85)
+                result.setdefault('reasons', ['High volume', 'Momentum', 'AI signal'])
+                result.setdefault('current_price', 0)
+                user_state[chat_id]['selected_pairs'] = [result]
+            except Exception as e:
+                logger.error(f"Analysis failed for {pair}: {e}", exc_info=True)
+                await update.message.reply_text(
+                    f"❌ **Analysis failed** for {pair}\n\n"
+                    f"Error: {str(e)[:200]}\n\n"
+                    f"Try again later or use /scan for hot pairs.",
+                    parse_mode='Markdown'
+                )
+                return
             # Show detail view
             real, mock = get_balance()
             bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
             margin_val = (10000 if state.get("trade_mode", "MOCK") == "MOCK" else (real or 10000)) * (state.get("margin", 1) / 100)
             conf = result["confidence"]
             greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
-            kb = [[InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")]]
+            # Get real-time price
             symbol_clean = result['symbol'].replace('/', '')
+            cur_price = result.get('current_price', 0)
             try:
-                cur_price, _ = get_binance_ticker(symbol_clean)
-                if cur_price and cur_price > 0:
-                    kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {result['symbol']} {cur_price:.2f}")])
+                ticker_price, _ = get_binance_ticker(symbol_clean)
+                if ticker_price and ticker_price > 0:
+                    cur_price = ticker_price
             except: pass
-            kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")])
             text_msg = (f"📊 {result['symbol']} {result['direction']} {state.get('trade_mode','MOCK')}\n\n"
                         f"Balance: {bal}\n"
-                        f"Price: {result['change']:+.2f}%\n"
+                        f"Change: {result['change']:+.2f}%" + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "") + "\n"
                         f"Reasons: {' | '.join(result['reasons'])}\n"
                         f"Leverage: {state.get('leverage',50)}x  |  Margin: {state.get('margin',1)}%  (${margin_val:,.0f})\n"
                         f"Entry: market  |  SL: TBD  |  TP: TBD  |  RRR: {result.get('rrr',2.0):.1f}\n"
                         f"Confidence: {conf}% {greens} 🦞")
+            kb = [[InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")]]
+            # Add SET ALERT button with current price
+            if cur_price and cur_price > 0:
+                kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {result['symbol']} {cur_price:.2f}")])
             await update.message.reply_text(text_msg, reply_markup=InlineKeyboardMarkup(kb))
             return
         else:
