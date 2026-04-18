@@ -148,6 +148,7 @@ def get_bingx_klines(symbol, interval="5m", limit=50):
 # ── Single Pair Analyzer ──
 def analyze_pair(pair):
     """Analyze a single pair (format 'BTC/USDT') and return result dict."""
+    print(f"[DEBUG] analyze_pair called with: {pair}")
     symbol = pair.replace("/", "")
     klines_data = get_bingx_klines(symbol, interval="5m", limit=50)
     change = 0
@@ -803,8 +804,10 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Handle BingX URL paste (with or without http prefix)
     text_lower = text.lower()
     if "bingx.com" in text_lower:
+        print(f"[DEBUG] BingX URL detected: {text[:80]}")
         logger.info(f"BingX URL detected: {text[:80]}")
         pair = extract_pair_from_bingx_url(text)
+        print(f"[DEBUG] Extracted pair: {pair}")
         logger.info(f"Extracted pair: {pair}")
         if pair:
             result = analyze_pair(pair)
