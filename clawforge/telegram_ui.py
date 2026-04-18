@@ -1401,7 +1401,7 @@ async def execute_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Validate pair is available on exchange before showing confirm screen
     if not is_pair_valid_on_bingx(p['symbol']):
         await q.edit_message_text(
-            f"❌ **Pair not available**\n\n{p['symbol']} is not listed on major exchanges.\n\nSelect a valid pair and try again.",
+            f"❌ **Pair not available**\n\n{p['symbol']} is not listed on BingX (validation failed).\n\nSelect a valid pair and try again.",
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]])
         )
         return
