@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Clawmimoto Telegram UI — Revised per user specs
+Clawmimoto Telegram UI - Revised per user specs
 Main Menu with news, BalRealMoc, ModeReal, wins, Gains
 SESSION: 2x2 grid with leverage/margin controls, AI scan, pair details
 POSITIONS: list with share PNL
@@ -24,40 +24,40 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Cont
 
 # ── Trading Trivia Facts ──
 TRADING_FACTS = [
-    "📜 **Fact:** The first recorded stock exchange was in Amsterdam, 1602 — the Dutch East India Company.",
-    "🔥 **Fact:** On Black Monday (1987), the Dow dropped 22% in a single day — still the biggest one-day % drop.",
+    "📜 **Fact:** The first recorded stock exchange was in Amsterdam, 1602 - the Dutch East India Company.",
+    "🔥 **Fact:** On Black Monday (1987), the Dow dropped 22% in a single day - still the biggest one-day % drop.",
     "🐋 **Fact:** About 90% of retail traders lose money. The 10% who win treat it like a business, not a casino.",
-    "⏰ **Fact:** The NYSE opens at 9:30 AM ET — that's when the smart money moves. The last 30 mins are often the wildest.",
+    "⏰ **Fact:** The NYSE opens at 9:30 AM ET - that's when the smart money moves. The last 30 mins are often the wildest.",
     "💡 **Fact:** Most pros use 1-2% risk per trade. If you risk more, you're gambling, not trading.",
-    "🌊 **Fact:** Crypto never sleeps — 24/7/365. That's why sleep management is a real edge for degens.",
+    "🌊 **Fact:** Crypto never sleeps - 24/7/365. That's why sleep management is a real edge for degens.",
     "🎯 **Fact:** The '2% rule' (never risk more than 2% per trade) has saved more accounts than any indicator.",
     "📈 **Fact:** The 'Greater Fool Theory' describes most crypto pumps: someone's always the greater fool.",
     "⚡ **Fact:** The average lifespan of a crypto token is 9 months. 99% of altcoins go to zero.",
-    "🏦 **Fact:** In 2023, Binance processed $14 trillion in trading volume — more than the GDP of China.",
-    "🧠 **Fact:** Trading is 80% psychology. Your brain is your biggest enemy — FOMO, FUD, revenge trading.",
-    "📊 **Fact:** The 'Golden Cross' (50 MA > 200 MA) is a classic bull signal — but it's often a late indicator.",
-    "💸 **Fact:** The 'Fed Put' isn't real — but markets believe in it. When the Fed steps in, everything rallies.",
+    "🏦 **Fact:** In 2023, Binance processed $14 trillion in trading volume - more than the GDP of China.",
+    "🧠 **Fact:** Trading is 80% psychology. Your brain is your biggest enemy - FOMO, FUD, revenge trading.",
+    "📊 **Fact:** The 'Golden Cross' (50 MA > 200 MA) is a classic bull signal - but it's often a late indicator.",
+    "💸 **Fact:** The 'Fed Put' isn't real - but markets believe in it. When the Fed steps in, everything rallies.",
     "🔢 **Fact:** The '80-20 rule' applies: 80% of your gains come from 20% of your trades. Quality > quantity.",
-    "🛡️ **Fact:** 'Not your keys, not your coins' — but also, 'Not your keys, no trading.' Exchanges are banks now."
+    "🛡️ **Fact:** 'Not your keys, not your coins' - but also, 'Not your keys, no trading.' Exchanges are banks now."
 ]
 
 # ── Trading Trivia Facts ──
 TRADING_FACTS = [
-    "📜 **Fact:** The first recorded stock exchange was in Amsterdam, 1602 — the Dutch East India Company.",
-    "🔥 **Fact:** On Black Monday (1987), the Dow dropped 22% in a single day — still the biggest one-day % drop.",
+    "📜 **Fact:** The first recorded stock exchange was in Amsterdam, 1602 - the Dutch East India Company.",
+    "🔥 **Fact:** On Black Monday (1987), the Dow dropped 22% in a single day - still the biggest one-day % drop.",
     "🐋 **Fact:** About 90% of retail traders lose money. The 10% who win treat it like a business, not a casino.",
-    "⏰ **Fact:** The NYSE opens at 9:30 AM ET — that's when the smart money moves. The last 30 mins are often the wildest.",
+    "⏰ **Fact:** The NYSE opens at 9:30 AM ET - that's when the smart money moves. The last 30 mins are often the wildest.",
     "💡 **Fact:** Most pros use 1-2% risk per trade. If you risk more, you're gambling, not trading.",
-    "🌊 **Fact:** Crypto never sleeps — 24/7/365. That's why sleep management is a real edge for degens.",
+    "🌊 **Fact:** Crypto never sleeps - 24/7/365. That's why sleep management is a real edge for degens.",
     "🎯 **Fact:** The '2% rule' (never risk more than 2% per trade) has saved more accounts than any indicator.",
     "📈 **Fact:** The 'Greater Fool Theory' describes most crypto pumps: someone's always the greater fool.",
     "⚡ **Fact:** The average lifespan of a crypto token is 9 months. 99% of altcoins go to zero.",
-    "🏦 **Fact:** In 2023, Binance processed $14 trillion in trading volume — more than the GDP of China.",
-    "🧠 **Fact:** Trading is 80% psychology. Your brain is your biggest enemy — FOMO, FUD, revenge trading.",
-    "📊 **Fact:** The 'Golden Cross' (50 MA > 200 MA) is a classic bull signal — but it's often a late indicator.",
-    "💸 **Fact:** The 'Fed Put' isn't real — but markets believe in it. When the Fed steps in, everything rallies.",
+    "🏦 **Fact:** In 2023, Binance processed $14 trillion in trading volume - more than the GDP of China.",
+    "🧠 **Fact:** Trading is 80% psychology. Your brain is your biggest enemy - FOMO, FUD, revenge trading.",
+    "📊 **Fact:** The 'Golden Cross' (50 MA > 200 MA) is a classic bull signal - but it's often a late indicator.",
+    "💸 **Fact:** The 'Fed Put' isn't real - but markets believe in it. When the Fed steps in, everything rallies.",
     "🔢 **Fact:** The '80-20 rule' applies: 80% of your gains come from 20% of your trades. Quality > quantity.",
-    "🛡️ **Fact:** 'Not your keys, not your coins' — but also, 'Not your keys, no trading.' Exchanges are banks now."
+    "🛡️ **Fact:** 'Not your keys, not your coins' - but also, 'Not your keys, no trading.' Exchanges are banks now."
 ]
 
 async def cycle_facts_on_message(msg, title: str, interval: int = 4):
@@ -255,7 +255,7 @@ def api_post(endpoint, payload=None):
         if r.status_code == 200:
             return True, ""
         else:
-            error_msg = f"{r.status_code} — {r.text[:200]}"
+            error_msg = f"{r.status_code} - {r.text[:200]}"
             logger.error(f"API POST {endpoint} failed: {error_msg}")
             return False, error_msg
     except Exception as e:
@@ -732,17 +732,17 @@ def get_market_news():
             seen.add(key)
             uniq.append((title, link))
     uniq = uniq[:4]
-    
+
     if not uniq:
         # Fallback placeholder if all feeds fail
         return (
-            "📢 *Market Pulse — " + datetime.now(timezone.utc).strftime("%b %d, %Y") + "*\n\n"
-            "• (News feeds temporarily unavailable — RSS error)\n"
+            "📢 *Market Pulse - " + datetime.now(timezone.utc).strftime("%b %d, %Y") + "*\n\n"
+            "• (News feeds temporarily unavailable - RSS error)\n"
         )
-    
+
     # Format: title + [Source](link) on same line
     lines = [f"• {title} [Source]({link})" for title, link in uniq]
-    header = "📢 *Market Pulse — " + datetime.now(timezone.utc).strftime("%b %d, %Y") + "*"
+    header = "📢 *Market Pulse - " + datetime.now(timezone.utc).strftime("%b %d, %Y") + "*"
     return f"{header}\n\n" + "\n".join(lines)
 
 def generate_ta():
@@ -947,7 +947,7 @@ async def ai_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pairs = ai_scan_pairs()
     user_state[chat_id]["selected_pairs"] = pairs
     kb = grid_2x2(pairs) + [[InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")]]
-    await q.edit_message_text("✅ **Scan Complete — Top 4 Pairs:**\n\nSelect a pair to view details & execute:", reply_markup=InlineKeyboardMarkup(kb))
+    await q.edit_message_text("✅ **Scan Complete - Top 4 Pairs:**\n\nSelect a pair to view details & execute:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
@@ -1050,7 +1050,7 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         user_state[chat_id] = {"leverage": 50, "margin": 1, "trade_mode": "MOCK", "selected_pairs": []}
     state = user_state.get(chat_id, {})
     logger.info(f"Text handler: chat={chat_id} text={text[:100]}")
-    
+
     # Handle BingX URL paste (with or without http prefix)
     text_lower = text.lower()
     if "bingx.com" in text_lower:
@@ -1119,6 +1119,61 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("❌ Could not extract pair from URL.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
             return
     
+    # Binance futures URL handling
+    if "binance.com" in text_lower and "/futures/" in text_lower:
+        pair = extract_pair_from_binance_url(text)
+        if pair:
+            # Validate pair exists on Binance
+            if not is_pair_valid_on_binance(pair):
+                await update.message.reply_text(
+                    f"❌ **Pair not available**\n\n{pair} is not listed on major exchanges (Binance check failed).\n\nTry a different pair like BTC/USDT, ETH/USDT, SOL/USDT.",
+                    parse_mode='Markdown',
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]])
+                )
+                return
+            try:
+                result = analyze_pair(pair)
+                result.setdefault('symbol', pair)
+                result.setdefault('direction', 'LONG')
+                result.setdefault('change', 0.0)
+                result.setdefault('confidence', 85)
+                result.setdefault('reasons', ['High volume', 'Momentum', 'AI signal'])
+                result.setdefault('current_price', 0)
+                user_state[chat_id]['selected_pairs'] = [result]
+            except Exception as e:
+                logger.error(f"Analysis failed for {pair}: {e}", exc_info=True)
+                await update.message.reply_text(
+                    f"❌ **Analysis failed** for {pair}\n\nError: {str(e)[:200]}\n\nTry again later or use /scan for hot pairs.",
+                    parse_mode='Markdown',
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]])
+                )
+                return
+            # Show detail view
+            real, mock = get_balance()
+            bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
+            margin_val = (10000 if state.get("trade_mode", "MOCK") == "MOCK" else (real or 10000)) * (state.get("margin", 1) / 100)
+            conf = result["confidence"]
+            greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
+            symbol_clean = result['symbol'].replace('/', '')
+            cur_price = result.get('current_price', 0)
+            try:
+                ticker_price, _ = get_binance_ticker(symbol_clean)
+                if ticker_price and ticker_price > 0:
+                    cur_price = ticker_price
+            except: pass
+            text_msg = (f"📊 {result['symbol']} {result['direction']} {state.get('trade_mode','MOCK')}\n\n"
+                        f"Balance: {bal}\n"
+                        f"Change: {result['change']:+.2f}%" + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "") + "\n"
+                        f"Reasons: {' | '.join(result['reasons'])}\n"
+                        f"Leverage: {state.get('leverage',50)}x  |  Margin: {state.get('margin',1)}%  (${margin_val:,.0f})\n"
+                        f"Entry: market  |  SL: TBD  |  TP: TBD  |  RRR: {result.get('rrr',2.0):.1f}\n"
+                        f"Confidence: {conf}% {greens} 🦞")
+            kb = [[InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")]]
+            if cur_price and cur_price > 0:
+                kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {result['symbol']} {cur_price:.2f}")])
+            await update.message.reply_text(text_msg, reply_markup=InlineKeyboardMarkup(kb))
+            return
+
     if state.get("awaiting_pair_input"):
         if "/" not in text:
             await update.message.reply_text("❌ Format: BASE/QUOTE (e.g., BTC/USDT)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
@@ -1159,6 +1214,35 @@ def extract_pair_from_bingx_url(url):
         logger.debug(f"URL parse error: {e}")
     return None
 
+def extract_pair_from_binance_url(url):
+    """Extract pair from Binance futures URL.
+    Example: https://www.binance.com/en/futures/GENIUSUSDT -> GENIUS/USDT
+    """
+    try:
+        from urllib.parse import urlparse
+        parsed = urlparse(url)
+        # Check if it's a binance.com futures URL
+        if 'binance.com' not in parsed.netloc.lower():
+            return None
+        path_parts = parsed.path.strip('/').split('/')
+        # Look for 'futures' segment and take next, or take last segment
+        for i, part in enumerate(path_parts):
+            if part.lower() == 'futures' and i + 1 < len(path_parts):
+                symbol = path_parts[i + 1].upper()
+                # Binance USDT-margined futures symbols end with USDT (e.g., BTCUSDT)
+                if symbol.endswith('USDT'):
+                    base = symbol[:-4]
+                    return f"{base}/USDT"
+        # Fallback: last path segment
+        if path_parts:
+            symbol = path_parts[-1].upper()
+            if symbol.endswith('USDT'):
+                base = symbol[:-4]
+                return f"{base}/USDT"
+    except Exception as e:
+        logger.debug(f"Binance URL parse error: {e}")
+    return None
+
 # ── Positions ──
 async def positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
@@ -1177,7 +1261,7 @@ async def positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     buttons = []
     for t in trades["trades"]:
         profit = t.get("profit_pct", 0)
-        btn_text = f"📌 {t['pair']} — {profit:+.1f}%"
+        btn_text = f"📌 {t['pair']} - {profit:+.1f}%"
         buttons.append([InlineKeyboardButton(btn_text, callback_data=f"pos_{t['trade_id']}")])
     buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="refresh_positions")])
     buttons.append([InlineKeyboardButton("⬅️ BACK", callback_data="main")])
@@ -1196,7 +1280,7 @@ async def refresh_positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     buttons = []
     for t in trades["trades"]:
         profit = t.get("profit_pct", 0)
-        btn_text = f"📌 {t['pair']} — {profit:+.1f}%"
+        btn_text = f"📌 {t['pair']} - {profit:+.1f}%"
         buttons.append([InlineKeyboardButton(btn_text, callback_data=f"pos_{t['trade_id']}")])
     buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="refresh_positions")])
     buttons.append([InlineKeyboardButton("⬅️ BACK", callback_data="main")])
@@ -1219,7 +1303,7 @@ async def pos_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     real, mock = get_balance()
     bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
     is_open = t.get("is_open", True)
-    
+
     # Build PnL line: unrealized for open, realized for closed
     if is_open:
         pnl_line = f"Unrealized: {t.get('profit_pct',0):+.1f}%"
@@ -1229,7 +1313,7 @@ async def pos_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         pnl_line = f"Realized PnL: {t.get('profit_pct',0):+.1f}%"
         if t.get('profit_abs') is not None:
             pnl_line += f" (${t['profit_abs']:,.2f})"
-    
+
     status_btn = InlineKeyboardButton("🔴 CLOSE POSITION", callback_data=f"close_{trade_id}") if is_open else InlineKeyboardButton("✅ CLOSED", callback_data="dummy")
     text = (f"📊 {t['pair']} {t.get('direction','LONG')} {'OPEN' if is_open else 'CLOSED'}\n\n"
             f"Balance: {bal}\n"
@@ -1275,7 +1359,7 @@ async def share_pnl_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("❌ Trade not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="positions")]]))
         return
     t = t["trades"][0]
-    # Generate card (placeholder — use PnL card generator when ready)
+    # Generate card (placeholder - use PnL card generator when ready)
     card_path = f"generated-cards/pnl_{trade_id}.png"
     # TODO: generate image with Pillow
     text = (f"📈 **PnL Share**\n\n"
@@ -1348,7 +1432,7 @@ async def confirm_exec_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if success:
         msg = "✅ **Trade executed!**"
         if state["trade_mode"] == "MOCK":
-            msg += "\n\n_MOCK mode — no real funds used_"
+            msg += "\n\n_MOCK mode - no real funds used_"
         msg += "\n\nCheck POSITIONS for status."
     else:
         msg = "❌ **Execution failed**\n\n"
@@ -1369,26 +1453,26 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🔍 **Scanning market...**\n\nFetching BingX hot pairs, analyzing 5M charts, order book, sentiment...",
         parse_mode="Markdown"
     )
-    
+
     async def do_scan():
         try:
             # Start facts cycling task
             facts_task = asyncio.create_task(cycle_facts_on_message(status_msg, "🔍 **Scanning market..."))
-            
+
             # Run blocking scan in executor to avoid blocking event loop
             loop = asyncio.get_event_loop()
             setups = await loop.run_in_executor(None, ai_scan_pairs)
-            
+
             # Cancel facts task
             facts_task.cancel()
             try:
                 await facts_task
             except:
                 pass
-            
+
             if not setups:
                 try:
-                    await status_msg.edit_text("❌ **Scan failed** — No pairs returned.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
+                    await status_msg.edit_text("❌ **Scan failed** - No pairs returned.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
                 except: pass
                 return
             user_state[chat_id]["selected_pairs"] = setups
@@ -1402,7 +1486,7 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             try:
                 await status_msg.edit_text(f"❌ **Scan error**: {str(e)[:100]}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
             except: pass
-    
+
     # Schedule scan (allows immediate response to /scan)
     asyncio.create_task(do_scan())
 
@@ -1413,23 +1497,23 @@ async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer("🔄 Running fresh scan...")
     chat_id = query.message.chat_id
-    
+
     async def do_refresh():
         try:
             # Start facts cycling task
             facts_task = asyncio.create_task(cycle_facts_on_message(query.message, "🔄 **Refreshing scan..."))
-            
+
             # Run blocking scan in executor
             loop = asyncio.get_event_loop()
             setups = await loop.run_in_executor(None, ai_scan_pairs)
-            
+
             # Cancel facts task
             facts_task.cancel()
             try:
                 await facts_task
             except:
                 pass
-            
+
             user_state[chat_id]["selected_pairs"] = setups
             try:
                 await query.message.delete()
@@ -1450,12 +1534,12 @@ async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
 async def send_scan_message(chat_id, setups, context):
     """Format and send scan results with a refresh button."""
-    text = "✅ **Scan Complete — Top 4 Pairs:**\n\nSelect a pair to view details & execute:\n\n"
+    text = "✅ **Scan Complete - Top 4 Pairs:**\n\nSelect a pair to view details & execute:\n\n"
     for i, p in enumerate(setups, 1):
         price_str = ""
         if p.get('current_price'):
             price_str = f" @ ${p['current_price']:,.2f}"
-        text += f"{i}. {p['symbol']} {p['direction']} — {p['change']:+.2f}%{price_str} | Conf: {p['confidence']}%\n"
+        text += f"{i}. {p['symbol']} {p['direction']} - {p['change']:+.2f}%{price_str} | Conf: {p['confidence']}%\n"
     kb = grid_2x2(setups)
     kb.append([InlineKeyboardButton("🔄 Refresh Scan", callback_data="/scan")])
     kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")])
@@ -1500,12 +1584,12 @@ async def custom_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     # Extract pair from callback data: custom_scan_BTC/USDT
     pair = q.data.replace("custom_scan_", "")
-    
+
     # Run AI analysis
     result = analyze_pair(pair)
     chat_id = q.message.chat_id
     user_state[chat_id]["selected_pairs"] = [result]
-    
+
     # Build detail view (same as pair_detail_cb)
     state = get_state(chat_id)
     real, mock = get_balance()
