@@ -348,6 +348,12 @@ def get_binance_ticker(symbol):
         logger.debug(f"Binance ticker error for {symbol}: {e}")
     return None, None
 
+def is_pair_valid_on_binance(pair: str) -> bool:
+    """Check if pair exists on Binance by trying to fetch its ticker."""
+    symbol = pair.replace("/", "")
+    price, _ = get_binance_ticker(symbol)
+    return price is not None and price > 0
+
 def get_okx_ticker(symbol):
     """Fetch ticker from OKX public API (no auth). Symbol format: BTC-USDT."""
     try:
@@ -921,9 +927,10 @@ async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"Leverage: {state['leverage']}x  |  Margin: {state['margin']}%  (${margin_val:,.0f})\n"
             f"Entry: market  |  SL: TBD  |  TP: TBD  |  RRR: {p.get('rrr', 2.0):.1f}\n"
             f"Confidence: {conf}% {greens} 🦞")
-    kb = [
-        [InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")],
-    ]
+    kb = []
+    # Only show EXECUTE if pair is valid on exchange
+    if is_pair_valid_on_binance(p['symbol']):
+        kb.append([InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")])
     # Add SET ALERT button with current price
     try:
         symbol_clean = p['symbol'].replace('/', '')
@@ -998,6 +1005,14 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         print(f"[DEBUG] Extracted pair: {pair}")
         logger.info(f"Extracted pair: {pair}")
         if pair:
+            # Validate pair exists on Binance (most comprehensive)
+            if not is_pair_valid_on_binance(pair):
+                await update.message.reply_text(
+                    f"❌ **Pair not available**\n\n{pair} is not listed on major exchanges (Binance check failed).\n\nTry a different pair like BTC/USDT, ETH/USDT, SOL/USDT.",
+                    parse_mode='Markdown',
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]])
+                )
+                return
             try:
                 result = analyze_pair(pair)
                 # Ensure required keys exist
@@ -1180,6 +1195,13 @@ async def execute_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("❌ No pair selected. Use SESSION MODE first.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
         return
     p = pairs[0]  # use first selected
+    # Validate pair is available on exchange before showing confirm screen
+    if not is_pair_valid_on_binance(p['symbol']):
+        await q.edit_message_text(
+            f"❌ **Pair not available**\n\n{p['symbol']} is not listed on major exchanges.\n\nSelect a valid pair and try again.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]])
+        )
+        return
     text = (f"🚀 **EXECUTE TRADE**\n\n"
             f"Pair: {p['symbol']} {p['direction']}\n"
             f"Leverage: {state['leverage']}x\n"
@@ -1204,6 +1226,13 @@ async def confirm_exec_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("❌ No pair selected.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
         return
     p = pairs[0]
+    # Validate pair is available on exchange before executing
+    if not is_pair_valid_on_binance(p['symbol']):
+        await q.edit_message_text(
+            f"❌ **Cannot execute**\n\n{p['symbol']} is not available on the exchange.\n\nSelect a valid pair and try again.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]])
+        )
+        return
     payload = {
         "pair": p["symbol"],
         "leverage": state["leverage"],
@@ -1397,9 +1426,10 @@ async def custom_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"Leverage: {state['leverage']}x  |  Margin: {state['margin']}%  (${margin_val:,.0f})\n"
             f"Entry: market  |  SL: TBD  |  TP: TBD  |  RRR: {result.get('rrr',2.0):.1f}\n"
             f"Confidence: {conf}% {greens} 🦞")
-    kb = [
-        [InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")],
-    ]
+    kb = []
+    # Only show EXECUTE if pair is valid on exchange
+    if is_pair_valid_on_binance(result['symbol']):
+        kb.append([InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")])
     # Add SET ALERT button with current price
     if cur_price and cur_price > 0:
         kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {result['symbol']} {cur_price:.2f}")])
