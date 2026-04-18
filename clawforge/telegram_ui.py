@@ -1074,10 +1074,10 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         print(f"[DEBUG] Extracted pair: {pair}")
         logger.info(f"Extracted pair: {pair}")
         if pair:
-            # Validate pair exists on Binance (most comprehensive)
+            # Validate pair exists on BingX (our exchange)
             if not is_pair_valid_on_bingx(pair):
                 await update.message.reply_text(
-                    f"❌ **Pair not available**\n\n{pair} is not listed on major exchanges (Binance check failed).\n\nTry a different pair like BTC/USDT, ETH/USDT, SOL/USDT.",
+                    f"❌ **Pair not available**\n\n{pair} is not listed on BingX (validation failed).\n\nTry a different pair like BTC/USDT, ETH/USDT, SOL/USDT.",
                     parse_mode='Markdown',
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]])
                 )
@@ -1137,10 +1137,10 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if "binance.com" in text_lower and "/futures/" in text_lower:
         pair = extract_pair_from_binance_url(text)
         if pair:
-            # Validate pair exists on Binance
+            # Validate pair exists on BingX (our exchange)
             if not is_pair_valid_on_bingx(pair):
                 await update.message.reply_text(
-                    f"❌ **Pair not available**\n\n{pair} is not listed on major exchanges (Binance check failed).\n\nTry a different pair like BTC/USDT, ETH/USDT, SOL/USDT.",
+                    f"❌ **Pair not available**\n\n{pair} is not listed on BingX (validation failed).\n\nTry a different pair like BTC/USDT, ETH/USDT, SOL/USDT.",
                     parse_mode='Markdown',
                     reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]])
                 )
