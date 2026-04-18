@@ -95,6 +95,89 @@ BINGX_API_SECRET = os.getenv("BINGX_API_SECRET")
 STEPFUN_API_KEY = os.getenv("STEPFUN_API_KEY")
 
 AUTH_HEADER = {"Authorization": f"Basic {base64.b64encode(f'{API_USER}:{API_PASS}'.encode()).decode()}"}
+
+# ── Access Control ──
+ADMIN_ID = int(os.getenv("ADMIN_TELEGRAM_ID", "7093901111"))
+REQUIRED_CHANNEL = os.getenv("REQUIRED_CHANNEL", "@RightclawTrade")
+# Whitelist: comma-separated Telegram user IDs (strings or ints)
+WHITELIST_RAW = os.getenv("WHITELISTED_USER_IDS", "")
+WHITELIST_IDS = set()
+for uid in WHITELIST_RAW.split(","):
+    uid = uid.strip()
+    if uid:
+        try:
+            WHITELIST_IDS.add(int(uid))
+        except ValueError:
+            pass  # ignore invalid
+
+async def check_channel_membership(user_id: int, bot_token: str, channel: str) -> bool:
+    """Check if user is a member of the required channel."""
+    if not bot_token or not channel:
+        return True  # no config → allow
+    url = f"https://api.telegram.org/bot{bot_token}/getChatMember"
+    payload = {"chat_id": channel, "user_id": user_id}
+    try:
+        r = requests.post(url, json=payload, timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            status = data.get("result", {}).get("status", "")
+            # member, administrator, creator are valid
+            return status in ("member", "administrator", "creator")
+    except Exception as e:
+        logger.debug(f"Channel membership check failed: {e}")
+    return False
+
+def get_user_tier(user_id: int) -> str:
+    """Return 'admin', 'whitelisted', or 'public'."""
+    if user_id == ADMIN_ID:
+        return "admin"
+    if user_id in WHITELIST_IDS:
+        return "whitelisted"
+    return "public"
+
+async def enforce_access(update: Update, context: ContextTypes.DEFAULT_TYPE, allow_admin: bool = True,
+                         allow_whitelisted: bool = True, require_channel: bool = True) -> bool:
+    """
+    Check if the user is allowed to execute this command/callback.
+    Returns True if allowed, False if denied (and sends denial message).
+    """
+    user = update.effective_user
+    if not user:
+        return False
+    user_id = user.id
+    tier = get_user_tier(user_id)
+    # Admin always allowed (if allow_admin=True)
+    if tier == "admin":
+        return True
+    # Whitelisted checks
+    if tier == "whitelisted":
+        if not allow_whitelisted:
+            await context.bot.send_message(
+                chat_id=user_id,
+                text="🚫 **Access Denied**\n\nYou are whitelisted but this command is admin-only.",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]])
+            )
+            return False
+        if require_channel:
+            member = await check_channel_membership(user_id, TOKEN, REQUIRED_CHANNEL)
+            if not member:
+                await context.bot.send_message(
+                    chat_id=user_id,
+                    text=f"🚫 **Channel Membership Required**\n\nYou must join {REQUIRED_CHANNEL} to use this bot.\n\n🔗 {REQUIRED_CHANNEL}",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]])
+                )
+                return False
+        return True
+    # Public: denied
+    await context.bot.send_message(
+        chat_id=user_id,
+        text=f"🚫 **Access Denied**\n\nThis bot is private.\n\n• Admin: full access\n• Whitelisted: trading only (must join {REQUIRED_CHANNEL})\n• Public: not allowed",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🏠 MAIN", callback_data="main")]])
+    )
+    return False
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -436,6 +519,8 @@ def grid_2x2(pairs):
 
 # ── Handlers ──
 async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     chat_id = update.effective_chat.id
     state = get_state(chat_id)
     news = get_market_news()
@@ -449,6 +534,8 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(f"🏠 **Clawmimoto Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     chat_id = q.message.chat_id
@@ -464,6 +551,8 @@ async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(f"🏠 **Clawmimoto Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def toggle_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     chat_id = q.message.chat_id
@@ -473,6 +562,8 @@ async def toggle_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await main_cb(update, ctx)
 
 async def show_balance_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     chat_id = q.message.chat_id
@@ -483,6 +574,8 @@ async def show_balance_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(f"💼 **Balance ({mode_label})**\n\n{bal}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="main")]]))
 
 async def show_stats_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     w, l, wr, pnl = get_stats()
@@ -490,6 +583,8 @@ async def show_stats_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="main")]]))
 
 async def show_gains_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     _, _, _, pnl = get_stats()
@@ -619,6 +714,8 @@ def build_market_snapshot():
     )
 
 async def market_now_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     # Define pairs: (display_label, bingx_symbol, binance_symbol, okx_symbol, coingecko_id)
@@ -697,6 +794,8 @@ async def market_now_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── Trade Menu ──
 async def trade_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     chat_id = q.message.chat_id
@@ -713,6 +812,8 @@ async def trade_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 async def scan_pair_prompt_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Show popular pair buttons for custom AI scan."""
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     # Predefined popular pairs (Binance symbols)
@@ -735,6 +836,8 @@ async def scan_pair_prompt_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── Session Mode ─-
 async def session_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     chat_id = q.message.chat_id
@@ -754,6 +857,8 @@ async def session_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 async def session_adjust_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     chat_id = q.message.chat_id
@@ -771,6 +876,8 @@ async def session_adjust_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await session_mode_cb(update, ctx)
 
 async def ai_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     chat_id = q.message.chat_id
@@ -782,6 +889,8 @@ async def ai_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text("✅ **Scan Complete — Top 4 Pairs:**\n\nSelect a pair to view details & execute:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     chat_id = q.message.chat_id
@@ -828,6 +937,8 @@ async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── Manual Mode ──
 async def manual_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     state = get_state(q.message.chat_id)
@@ -844,6 +955,8 @@ async def manual_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text("👷 **MANUAL MODE**\n\nSelect pair to trade:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def add_pair_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     top = get_bingx_top_pairs(limit=10)
@@ -858,12 +971,16 @@ async def add_pair_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text("➕ **ADD PAIR**\n\nSelect or enter custom:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def other_pair_input_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     await q.edit_message_text("⌨️ **ENTER CUSTOM PAIR**\n\nType ticker (e.g., BTC/USDT) in chat.\nI'll verify on BingX.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="add_pair_menu")]]))
     user_state[q.message.chat_id]["awaiting_pair_input"] = True
 
 async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     chat_id = update.effective_chat.id
     text = update.message.text.upper()
     # Ensure user_state entry exists
@@ -974,6 +1091,8 @@ def extract_pair_from_bingx_url(url):
 
 # ── Positions ──
 async def positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     trades = api_get("/api/v1/trades?status=open")
@@ -989,6 +1108,8 @@ async def positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text("📊 **Open Positions**\n\nSelect one:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def pos_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     trade_id = q.data.split("_", 1)[1]
@@ -1014,6 +1135,8 @@ async def pos_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 async def close_position_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     trade_id = q.data.split("_", 1)[1]
@@ -1024,6 +1147,8 @@ async def close_position_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("❌ Failed to close.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="positions")]]))
 
 async def share_pnl_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     trade_id = q.data.split("_", 1)[1]
@@ -1044,6 +1169,8 @@ async def share_pnl_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── Execute Trade ──
 async def execute_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     chat_id = q.message.chat_id
@@ -1066,6 +1193,8 @@ async def execute_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 async def confirm_exec_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer("⏳ Executing...")
     chat_id = q.message.chat_id
@@ -1100,6 +1229,8 @@ async def confirm_exec_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 # ── Scan Command ──
 async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /scan command: run AI scan asynchronously and send results."""
+    if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
+        return
     chat_id = update.effective_chat.id
     # Acknowledge immediately
     status_msg = await update.message.reply_text(
@@ -1145,6 +1276,8 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Re-run scan and update message (async)."""
+    if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
+        return
     query = update.callback_query
     await query.answer("🔄 Running fresh scan...")
     chat_id = query.message.chat_id
@@ -1199,6 +1332,8 @@ async def send_scan_message(chat_id, setups, context):
 # ── Alert ──
 async def alert_set_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle alert set callback: expects data like '/alert PAIR PRICE'."""
+    if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
+        return
     query = update.callback_query
     await query.answer()
     parts = query.data.split()
@@ -1227,6 +1362,8 @@ async def alert_set_callback(update: Update, context: ContextTypes.DEFAULT_TYPE)
 # ── Custom Pair Scan ──
 async def custom_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Handle custom pair scan button press."""
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
     q = update.callback_query
     await q.answer()
     # Extract pair from callback data: custom_scan_BTC/USDT
