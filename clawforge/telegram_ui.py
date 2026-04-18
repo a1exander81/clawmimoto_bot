@@ -786,6 +786,62 @@ async def confirm_exec_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     msg = "✅ **Trade executed!**" if result else "❌ **Execution failed**"
     await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
 
+# ── Scan Command ──
+async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle /scan command: run AI scan and send results with refresh button."""
+    chat_id = update.effective_chat.id
+    setups = ai_scan_pairs()
+    user_state[chat_id]["selected_pairs"] = setups
+    await send_scan_message(chat_id, setups, context)
+
+async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Re-run scan and update message."""
+    query = update.callback_query
+    await query.answer("🔄 Running fresh scan...")
+    setups = ai_scan_pairs()
+    chat_id = query.message.chat_id
+    user_state[chat_id]["selected_pairs"] = setups
+    await query.message.delete()
+    await send_scan_message(chat_id, setups, context)
+
+async def send_scan_message(chat_id, setups, context):
+    """Format and send scan results with a refresh button."""
+    text = "✅ **Scan Complete — Top 4 Pairs:**\n\nSelect a pair to view details & execute:\n\n"
+    for i, p in enumerate(setups, 1):
+        text += f"{i}. {p['symbol']} {p['direction']} — {p['change']:+.2f}% | Conf: {p['confidence']}%\n"
+    kb = grid_2x2(setups)
+    kb.append([InlineKeyboardButton("🔄 Refresh Scan", callback_data="/scan")])
+    kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")])
+    await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+# ── Alert ──
+async def alert_set_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Handle alert set callback: expects data like '/alert PAIR PRICE'."""
+    query = update.callback_query
+    await query.answer()
+    parts = query.data.split()
+    if len(parts) < 3:
+        await query.edit_message_text("❌ Invalid alert format.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
+        return
+    pair = parts[1]
+    try:
+        price = float(parts[2])
+    except ValueError:
+        await query.edit_message_text("❌ Invalid price.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
+        return
+    alert_id = f"{pair}_{price}_{datetime.utcnow().timestamp()}"
+    context.bot_data.setdefault('alerts', {})[alert_id] = {
+        'pair': pair,
+        'price': price,
+        'user_id': query.from_user.id,
+        'created_at': datetime.utcnow().isoformat()
+    }
+    await query.edit_message_text(
+        f"🔔 **Alert Set**\n\n• Pair: {pair}\n• Trigger: ${price:,.2f}\n• ID: `{alert_id[:8]}`\n\n_You'll get notified when price hits this level_",
+        parse_mode='Markdown',
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data=f"pair_{pair}")]])
+    )
+
 # ── Error handler ──
 async def error_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     logger.error(f"Exception: {ctx.error}", exc_info=ctx.error)
@@ -802,6 +858,7 @@ def main():
     logger.info("Connected to Freqtrade API")
     app = Application.builder().token(TOKEN).build()
     app.add_handler(CommandHandler(["start", "cmd"], start))
+    app.add_handler(CommandHandler("scan", scan_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_input_handler))
     # Callbacks
     app.add_handler(CallbackQueryHandler(main_cb, pattern="^main$"))
@@ -824,6 +881,8 @@ def main():
     app.add_handler(CallbackQueryHandler(execute_cb, pattern="^execute$"))
     app.add_handler(CallbackQueryHandler(market_now_cb, pattern="^market_now$"))
     app.add_handler(CallbackQueryHandler(confirm_exec_cb, pattern="^confirm_"))
+    app.add_handler(CallbackQueryHandler(alert_set_callback, pattern=r'^/alert '))
+    app.add_handler(CallbackQueryHandler(refresh_scan_callback, pattern=r'^/scan$'))
     app.add_error_handler(error_handler)
     logger.info("Starting Clawmimoto Telegram UI...")
     # Start background snapshot thread (every 4 hours)
