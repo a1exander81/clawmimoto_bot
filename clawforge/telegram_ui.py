@@ -83,9 +83,8 @@ def bingx_signed_request(method, endpoint, params=None):
         logger.error(f"BingX API error: {e}")
         return None
 
-# ── BingX Hot Pairs Fetcher ──
 def get_bingx_hot_pairs(limit=5):
-    """Fetch top hot pairs from BingX ticker."""
+    """Fetch top hot pairs from BingX ticker with Binance fallback."""
     try:
         data = bingx_signed_request("GET", "/openApi/swap/v2/quote/ticker", timeout=5)
         if data and "data" in data:
@@ -97,10 +96,52 @@ def get_bingx_hot_pairs(limit=5):
             return pairs
     except Exception as e:
         logger.debug(f"BingX hot pairs error: {e}")
-    # Fallback
+    # Fallback to Binance 24hr gainers
+    try:
+        r = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=5)
+        if r.status_code == 200:
+            data = r.json()
+            # Sort by percentChange descending, exclude stablecoins
+            stable = ["USDT", "USDC", "BUSD", "DAI"]
+            filtered = [d for d in data if not any(s in d.get("symbol", "") for s in stable)]
+            filtered.sort(key=lambda x: float(x.get("priceChangePercent", 0)), reverse=True)
+            pairs = [f"{d['symbol'][:-4]}/{d['symbol'][-4:]}" for d in filtered[:limit]]
+            logger.info(f"Binance fallback hot pairs: {pairs}")
+            return pairs
+    except Exception as e:
+        logger.debug(f"Binance fallback error: {e}")
+    # Ultimate fallback
     fallback = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"][:limit]
-    logger.warning("BingX ticker failed, using fallback list")
+    logger.warning("All hot pair sources failed, using hardcoded list")
     return fallback
+
+def get_bingx_klines(symbol, interval="5m", limit=50):
+    """Fetch klines from BingX with Binance fallback."""
+    # Try BingX first
+    try:
+        data = bingx_signed_request("GET", "/openApi/swap/v2/quote/klines", {"symbol": symbol, "interval": interval, "limit": str(limit)}, timeout=5)
+        if data and "data" in data and len(data["data"]) >= limit:
+            logger.info(f"Data source: BingX klines for {symbol}")
+            return data
+    except Exception as e:
+        logger.debug(f"BingX klines error: {e}")
+    # Fallback to Binance
+    try:
+        binance_symbol = symbol.replace("/", "")
+        url = f"https://api.binance.com/api/v3/klines?symbol={binance_symbol}&interval={interval}&limit={limit}"
+        r = requests.get(url, timeout=5)
+        if r.status_code == 200:
+            raw = r.json()
+            candles = []
+            for c in raw:
+                candles.append({
+                    "open": c[1], "high": c[2], "low": c[3], "close": c[4], "volume": c[5]
+                })
+            logger.info(f"Binance klines fallback for {symbol} ({len(candles)} candles)")
+            return {"data": candles}
+    except Exception as e:
+        logger.debug(f"Binance klines fallback error: {e}")
+    return None
 
 # ── Multi-Exchange Ticker Fetchers ──
 def get_binance_ticker(symbol):
@@ -188,7 +229,7 @@ def call_stepfun_skill(prompt):
         "temperature": 0.7
     }
     try:
-        r = requests.post("https://api.stepfun.ai/v1/chat/completions", json=payload, headers=headers, timeout=15)
+        r = requests.post("https://api.stepfun.ai/v1/chat/completions", json=payload, headers=headers, timeout=5)
         if r.status_code == 200:
             return r.json()["choices"][0]["message"]["content"]
     except Exception as e:
@@ -196,28 +237,27 @@ def call_stepfun_skill(prompt):
     return None
 
 def ai_scan_pairs():
-    """Scan BingX hot pairs, call StepFun, return top 4 with data"""
-    hot = get_bingx_hot_pairs(limit=10)
+    """Scan hot pairs, get klines (with fallback), call StepFun, return top 4."""
+    hot = get_bingx_hot_pairs(limit=6)  # only fetch 6 pairs for speed
     results = []
     for pair in hot:
         symbol = pair.replace("/", "")
-        klines = bingx_signed_request("GET", "/openApi/swap/v2/quote/klines", {"symbol": symbol, "interval": "5m", "limit": "50"})
+        klines_data = get_bingx_klines(symbol, interval="5m", limit=50)
         change = 0
         volume = 0
-        if klines and "data" in klines and len(klines["data"]) >= 2:
-            closes = [float(k["close"]) for k in klines["data"][-10:]]
+        if klines_data and "data" in klines_data and len(klines_data["data"]) >= 2:
+            closes = [float(k["close"]) for k in klines_data["data"][-10:]]
             if len(closes) >= 2:
                 change = (closes[-1] - closes[-2]) / closes[-2] * 100
-            volume = sum(float(k["volume"]) for k in klines["data"][-5:])
+            volume = sum(float(k["volume"]) for k in klines_data["data"][-5:])
         # AI reasoning
-        prompt = f"Scalp analysis for {pair} 5M: change {change:.2f}%, volume {volume:.0f}. Give: direction (LONG/SHORT), confidence 80-90%, RRR 1.5-3.0, 3 reasons, entry/sl/tp levels."
+        prompt = f"Scalp analysis for {pair} 5M: change {change:.2f}%, volume {volume:.0f}. Give: direction (LONG/SHORT), confidence 80-90%, RRR 1.5-3.0, 3 reasons."
         ai_text = call_stepfun_skill(prompt)
         direction = "LONG"
-        confidence = 85
+        confidence = 85 if change >= 0 else 75
         reasons = ["High volume", "Momentum", "AI signal"]
         entry = 0; sl = 0; tp = 0; rrr = 0
         if ai_text:
-            # Simple parse (improve later)
             ai_lower = ai_text.lower()
             if "short" in ai_lower:
                 direction = "SHORT"
@@ -226,7 +266,7 @@ def ai_scan_pairs():
                     confidence = int(''.join(filter(str.isdigit, ai_text.split("confidence")[1].split("%")[0])))
                 except:
                     pass
-            reasons = [line.strip("- ") for line in ai_text.split('\n') if line.strip()][:3]
+            reasons = [line.strip("- * ") for line in ai_text.split('\n') if line.strip()][:3] or reasons
         results.append({
             "symbol": pair,
             "direction": direction,
@@ -236,8 +276,8 @@ def ai_scan_pairs():
             "reasons": reasons,
             "entry": entry, "sl": sl, "tp": tp, "rrr": rrr
         })
-    # Sort by volume + confidence
-    results.sort(key=lambda x: (x["volume"], x["confidence"]), reverse=True)
+    # Sort by confidence desc, take top 4
+    results.sort(key=lambda x: x["confidence"], reverse=True)
     return results[:4]
 
 # ── UI Builders ──
@@ -814,21 +854,51 @@ async def confirm_exec_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── Scan Command ──
 async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /scan command: run AI scan and send results with refresh button."""
+    """Handle /scan command: run AI scan asynchronously and send results."""
     chat_id = update.effective_chat.id
-    setups = ai_scan_pairs()
-    user_state[chat_id]["selected_pairs"] = setups
-    await send_scan_message(chat_id, setups, context)
+    # Acknowledge immediately
+    status_msg = await update.message.reply_text("🔍 **Scanning market...**\n\nFetching BingX hot pairs, analyzing 5M charts, order book, sentiment...", parse_mode="Markdown")
+    
+    # Run scan in background to avoid timeout
+    async def do_scan():
+        try:
+            setups = ai_scan_pairs()
+            if not setups:
+                await status_msg.edit_text("❌ **Scan failed** — No pairs returned. Check API connectivity.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
+                return
+            user_state[chat_id]["selected_pairs"] = setups
+            # Delete status and send results
+            await status_msg.delete()
+            await send_scan_message(chat_id, setups, context)
+        except Exception as e:
+            logger.error(f"Scan error: {e}", exc_info=True)
+            await status_msg.edit_text(f"❌ **Scan error**: {str(e)[:100]}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
+    
+    # Schedule scan (allows immediate response to /scan)
+    asyncio.create_task(do_scan())
 
 async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Re-run scan and update message."""
+    """Re-run scan and update message (async)."""
     query = update.callback_query
     await query.answer("🔄 Running fresh scan...")
-    setups = ai_scan_pairs()
     chat_id = query.message.chat_id
-    user_state[chat_id]["selected_pairs"] = setups
-    await query.message.delete()
-    await send_scan_message(chat_id, setups, context)
+    
+    async def do_refresh():
+        try:
+            setups = ai_scan_pairs()
+            user_state[chat_id]["selected_pairs"] = setups
+            await query.message.delete()
+            await send_scan_message(chat_id, setups, context)
+        except Exception as e:
+            logger.error(f"Refresh scan error: {e}", exc_info=True)
+            await query.edit_message_text(
+                f"❌ **Scan failed**: {str(e)[:100]}",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("🔄 RETRY", callback_data="/scan")],
+                    [InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")]
+                ])
+            )
+    asyncio.create_task(do_refresh())
 
 async def send_scan_message(chat_id, setups, context):
     """Format and send scan results with a refresh button."""
