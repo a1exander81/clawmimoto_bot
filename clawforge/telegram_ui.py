@@ -80,6 +80,56 @@ async def cycle_facts_on_message(msg, title: str, interval: int = 4):
     except asyncio.CancelledError:
         pass
 
+# ── Auto-refresh for position details ──
+position_refresh_tasks = {}  # chat_id -> asyncio.Task
+
+async def auto_refresh_position(chat_id: int, trade_id: str, context: ContextTypes.DEFAULT_TYPE, interval: int = 6):
+    """Periodically update position detail message every `interval` seconds until cancelled."""
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            # Fetch fresh trade data
+            t_data = api_get(f"/api/v1/trades?trade_id={trade_id}")
+            if not t_data or not t_data.get("trades"):
+                continue  # trade gone, will be cleaned up by cancel
+            t = t_data["trades"][0]
+            # Rebuild the detail view text & buttons (similar to pos_detail_cb)
+            state = get_state(chat_id)
+            real, mock = get_balance()
+            bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
+            is_open = t.get("is_open", True)
+            if is_open:
+                pnl_line = f"Unrealized: {t.get('profit_pct',0):+.1f}%"
+                if t.get('profit_abs') is not None:
+                    pnl_line += f" (${t['profit_abs']:,.2f})"
+            else:
+                pnl_line = f"Realized PnL: {t.get('profit_pct',0):+.1f}%"
+                if t.get('profit_abs') is not None:
+                    pnl_line += f" (${t['profit_abs']:,.2f})"
+            status_btn = InlineKeyboardButton("🔴 CLOSE POSITION", callback_data=f"close_{trade_id}") if is_open else InlineKeyboardButton("✅ CLOSED", callback_data="dummy")
+            text = (f"📊 {t['pair']} {t.get('direction','LONG')} {'OPEN' if is_open else 'CLOSED'}\n\n"
+                    f"Balance: {bal}\n"
+                    f"Time: {t.get('open_date','')}\n"
+                    f"Margin: ${t.get('stake_amount',0):,.2f}  |  {pnl_line}\n"
+                    f"Entry: {t.get('open_rate',0):,.2f}  |  SL: {t.get('stop_loss_pct',0):.1f}%  |  TP: {t.get('take_profit',0):,.2f}\n")
+            kb = [
+                [status_btn],
+                [InlineKeyboardButton("📤 Share PNL", callback_data=f"share_{trade_id}")],
+                [InlineKeyboardButton("🔄 Refresh", callback_data=f"pos_{trade_id}")],
+                [InlineKeyboardButton("⬅️ BACK", callback_data="positions")]
+            ]
+            try:
+                await context.bot.edit_message_text(chat_id=chat_id, message_id=position_refresh_tasks[chat_id]["msg_id"], text=text, reply_markup=InlineKeyboardMarkup(kb))
+            except Exception as e:
+                # Message probably deleted or inaccessible; cancel task
+                logger.debug(f"Auto-refresh for {chat_id} stopped: {e}")
+                break
+    except asyncio.CancelledError:
+        pass
+    finally:
+        if chat_id in position_refresh_tasks:
+            del position_refresh_tasks[chat_id]
+
 # ── Load config ──
 ENV_PATH = Path(__file__).parent.parent / ".env"
 if ENV_PATH.exists():
@@ -542,6 +592,11 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
         return
+    # Cancel any auto-refresh task (user left position detail)
+    chat_id = update.effective_chat.id
+    if chat_id in position_refresh_tasks:
+        position_refresh_tasks[chat_id]["task"].cancel()
+        del position_refresh_tasks[chat_id]
     q = update.callback_query
     await q.answer()
     chat_id = q.message.chat_id
@@ -1108,6 +1163,11 @@ def extract_pair_from_bingx_url(url):
 async def positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
         return
+    # Cancel any auto-refresh task for this chat (leaving position detail)
+    chat_id = update.effective_chat.id
+    if chat_id in position_refresh_tasks:
+        position_refresh_tasks[chat_id]["task"].cancel()
+        del position_refresh_tasks[chat_id]
     q = update.callback_query
     await q.answer()
     trades = api_get("/api/v1/trades?status=open")
@@ -1119,6 +1179,26 @@ async def positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         profit = t.get("profit_pct", 0)
         btn_text = f"📌 {t['pair']} — {profit:+.1f}%"
         buttons.append([InlineKeyboardButton(btn_text, callback_data=f"pos_{t['trade_id']}")])
+    buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="refresh_positions")])
+    buttons.append([InlineKeyboardButton("⬅️ BACK", callback_data="main")])
+    await q.edit_message_text("📊 **Open Positions**\n\nSelect one:", reply_markup=InlineKeyboardMarkup(buttons))
+
+async def refresh_positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Refresh the positions list (called from Refresh button)."""
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
+    q = update.callback_query
+    await q.answer("🔄 Refreshing...")
+    trades = api_get("/api/v1/trades?status=open")
+    if not trades or not trades.get("trades"):
+        await q.edit_message_text("📊 **No open positions**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
+        return
+    buttons = []
+    for t in trades["trades"]:
+        profit = t.get("profit_pct", 0)
+        btn_text = f"📌 {t['pair']} — {profit:+.1f}%"
+        buttons.append([InlineKeyboardButton(btn_text, callback_data=f"pos_{t['trade_id']}")])
+    buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="refresh_positions")])
     buttons.append([InlineKeyboardButton("⬅️ BACK", callback_data="main")])
     await q.edit_message_text("📊 **Open Positions**\n\nSelect one:", reply_markup=InlineKeyboardMarkup(buttons))
 
@@ -1133,21 +1213,44 @@ async def pos_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("❌ Trade not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="positions")]]))
         return
     t = t["trades"][0]
+    # Use user's current trade mode for balance display
+    chat_id = q.message.chat_id
+    state = get_state(chat_id)
     real, mock = get_balance()
-    bal = format_balance(real, mock, t.get("is_mock", False) and "MOCK" or "REAL")
+    bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
     is_open = t.get("is_open", True)
+    
+    # Build PnL line: unrealized for open, realized for closed
+    if is_open:
+        pnl_line = f"Unrealized: {t.get('profit_pct',0):+.1f}%"
+        if t.get('profit_abs') is not None:
+            pnl_line += f" (${t['profit_abs']:,.2f})"
+    else:
+        pnl_line = f"Realized PnL: {t.get('profit_pct',0):+.1f}%"
+        if t.get('profit_abs') is not None:
+            pnl_line += f" (${t['profit_abs']:,.2f})"
+    
     status_btn = InlineKeyboardButton("🔴 CLOSE POSITION", callback_data=f"close_{trade_id}") if is_open else InlineKeyboardButton("✅ CLOSED", callback_data="dummy")
     text = (f"📊 {t['pair']} {t.get('direction','LONG')} {'OPEN' if is_open else 'CLOSED'}\n\n"
             f"Balance: {bal}\n"
             f"Time: {t.get('open_date','')}\n"
-            f"Margin: ${t.get('stake_amount',0):,.2f}  |  Unrealized: {t.get('profit_pct',0):+.1f}%\n"
+            f"Margin: ${t.get('stake_amount',0):,.2f}  |  {pnl_line}\n"
             f"Entry: {t.get('open_rate',0):,.2f}  |  SL: {t.get('stop_loss_pct',0):.1f}%  |  TP: {t.get('take_profit',0):,.2f}\n")
     kb = [
         [status_btn],
         [InlineKeyboardButton("📤 Share PNL", callback_data=f"share_{trade_id}")],
+        [InlineKeyboardButton("🔄 Refresh", callback_data=f"pos_{trade_id}")],
         [InlineKeyboardButton("⬅️ BACK", callback_data="positions")]
     ]
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    # Start auto-refresh task for this chat (if not already running)
+    chat_id = q.message.chat_id
+    # Cancel existing task if any
+    if chat_id in position_refresh_tasks:
+        position_refresh_tasks[chat_id].cancel()
+    # Start new background refresh task
+    task = asyncio.create_task(auto_refresh_position(chat_id, trade_id, ctx))
+    position_refresh_tasks[chat_id] = {"task": task, "msg_id": q.message.message_id, "trade_id": trade_id}
 
 async def close_position_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
@@ -1472,6 +1575,7 @@ def main():
     app.add_handler(CallbackQueryHandler(other_pair_input_cb, pattern="^other_pair_input$"))
     app.add_handler(CallbackQueryHandler(positions_cb, pattern="^positions$"))
     app.add_handler(CallbackQueryHandler(pos_detail_cb, pattern="^pos_"))
+    app.add_handler(CallbackQueryHandler(refresh_positions_cb, pattern="^refresh_positions$"))
     app.add_handler(CallbackQueryHandler(close_position_cb, pattern="^close_"))
     app.add_handler(CallbackQueryHandler(share_pnl_cb, pattern="^share_"))
     app.add_handler(CallbackQueryHandler(execute_cb, pattern="^execute$"))
