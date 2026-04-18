@@ -59,6 +59,8 @@ def api_get(endpoint):
 def api_post(endpoint, payload=None):
     try:
         r = requests.post(f"{API_URL}{endpoint}", json=payload or {}, headers=AUTH_HEADER, timeout=10)
+        if r.status_code != 200:
+            logger.error(f"API POST {endpoint} failed: {r.status_code} — {r.text[:200]}")
         return r.status_code == 200
     except Exception as e:
         logger.error(f"API POST {endpoint} failed: {e}")
@@ -784,9 +786,12 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.upper()
     state = user_state.get(chat_id, {})
     
-    # Handle BingX URL paste
-    if text.startswith("HTTP") and "BINGX.COM" in text:
+    # Handle BingX URL paste (with or without http prefix)
+    text_lower = text.lower()
+    if "bingx.com" in text_lower:
+        logger.info(f"BingX URL detected: {text[:80]}")
         pair = extract_pair_from_bingx_url(text)
+        logger.info(f"Extracted pair: {pair}")
         if pair:
             result = analyze_pair(pair)
             user_state[chat_id]["selected_pairs"] = [result]
