@@ -611,8 +611,16 @@ async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"Confidence: {conf}% {greens} 🦞")
     kb = [
         [InlineKeyboardButton("🚀 EXECUTE", callback_data=f"exec_{p['symbol']}")],
-        [InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]
     ]
+    # Add SET ALERT button with current price
+    try:
+        symbol_clean = p['symbol'].replace('/', '')
+        cur_price, _ = get_binance_ticker(symbol_clean)
+        if cur_price and cur_price > 0:
+            kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {p['symbol']} {cur_price:.2f}")])
+    except Exception as e:
+        logger.debug(f"Alert price fetch failed: {e}")
+    kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")])
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 # ── Manual Mode ──
