@@ -242,8 +242,13 @@ logger = logging.getLogger(__name__)
 user_state = {}  # {chat_id: {"leverage": 50, "margin": 1, "trade_mode": "MOCK", "selected_pair": None}}
 
 def get_state(chat_id):
+    """Get or initialize user state with all required keys."""
     if chat_id not in user_state:
-        user_state[chat_id] = {"leverage": 50, "margin": 1, "trade_mode": "MOCK", "selected_pair": None}
+        user_state[chat_id] = {}
+    # Ensure all required keys exist (migrate old/incomplete state)
+    defaults = {"leverage": 50, "margin": 1, "trade_mode": "MOCK", "selected_pair": None}
+    for key, val in defaults.items():
+        user_state[chat_id].setdefault(key, val)
     return user_state[chat_id]
 
 # ── API helpers ──
