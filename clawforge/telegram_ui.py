@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import feedparser
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, error
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 # ── Trading Trivia Facts ──
@@ -1400,7 +1400,7 @@ async def pos_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = q.message.chat_id
     # Cancel existing task if any
     if chat_id in position_refresh_tasks:
-        position_refresh_tasks[chat_id].cancel()
+        position_refresh_tasks[chat_id]["task"].cancel()
     # Start new background refresh task
     task = asyncio.create_task(auto_refresh_position(chat_id, trade_id, ctx))
     position_refresh_tasks[chat_id] = {"task": task, "msg_id": q.message.message_id, "trade_id": trade_id}
@@ -1697,7 +1697,11 @@ async def custom_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── Error handler ──
 async def error_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    logger.error(f"Exception: {ctx.error}", exc_info=ctx.error)
+    error = ctx.error
+    # Ignore benign Telegram errors
+    if isinstance(error, telegram.error.BadRequest) and "Message is not modified" in str(error):
+        return
+    logger.error(f"Exception: {error}", exc_info=error)
 
 # ── Build & Run ──
 def main():
