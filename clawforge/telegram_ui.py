@@ -970,6 +970,9 @@ async def ai_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     chat_id = q.message.chat_id
     state = get_state(chat_id)
+    # Set back-context for pair detail
+    user_state.setdefault(chat_id, {})
+    user_state[chat_id]['pair_detail_back'] = 'ai_scan'
     await q.edit_message_text("🔍 **AI scanning market...**\n\nFetching BingX hot pairs, analyzing 5M charts, order book, sentiment...")
     pairs = ai_scan_pairs()
     user_state[chat_id]["selected_pairs"] = pairs
@@ -1025,13 +1028,87 @@ async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")])
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
+async def select_pair_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Handle pair selection from Manual Mode or Add Pair menu.
+    Runs AI analysis and shows pair detail with context-aware back button."""
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
+    q = update.callback_query
+    await q.answer()
+    chat_id = q.message.chat_id
+    symbol = q.data.split("_", 1)[1]  # format: select_BTC/USDT
+    
+    # Show analyzing message
+    await q.edit_message_text(f"🔍 Analyzing {symbol}...", parse_mode="Markdown")
+    
+    # Run analysis
+    try:
+        result = analyze_pair(symbol)
+        result.setdefault('symbol', symbol)
+        result.setdefault('direction', 'LONG')
+        result.setdefault('change', 0.0)
+        result.setdefault('confidence', 85)
+        result.setdefault('reasons', ['Volume spike', 'Momentum'])
+        result.setdefault('current_price', 0)
+        
+        # Store in user_state
+        user_state.setdefault(chat_id, {"selected_pairs": []})
+        user_state[chat_id]['selected_pairs'] = [result]
+        
+        # Determine back target from context
+        back_target = user_state[chat_id].get('pair_detail_back', 'manual_mode')
+        
+        # Render detail
+        state = get_state(chat_id)
+        real, mock = get_balance()
+        bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
+        margin_val = (10000 if state["trade_mode"] == "MOCK" else (real or 10000)) * (state["margin"] / 100)
+        conf = result['confidence']
+        greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
+        cur_price = result.get('current_price', 0)
+        if not cur_price:
+            try:
+                symbol_clean = result['symbol'].replace('/', '')
+                cur_price, _ = get_binance_ticker(symbol_clean)
+            except: pass
+        text = (f"📊 {result['symbol']} {result['direction']} {state['trade_mode']}\n\n"
+                f"Balance: {bal}\n"
+                f"Change: {result['change']:+.2f}%"
+                + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "")
+                + "\n"
+                f"Reasons: {' | '.join(result['reasons'])}\n"
+                f"Leverage: {state['leverage']}x  |  Margin: {state['margin']}%  (${margin_val:,.0f})\n"
+                f"Entry: market  |  SL: TBD  |  TP: TBD  |  RRR: {result.get('rrr', 2.0):.1f}\n"
+                f"Confidence: {conf}% {greens} 🦞")
+        kb = []
+        user_id = update.effective_user.id
+        if is_pair_valid_for_user(result['symbol'], user_id):
+            kb.append([InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")])
+        try:
+            symbol_clean = result['symbol'].replace('/', '')
+            cur_price, _ = get_binance_ticker(symbol_clean)
+            if cur_price and cur_price > 0:
+                kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {result['symbol']} {cur_price:.2f}")])
+        except Exception as e:
+            logger.debug(f"Alert price fetch failed: {e}")
+        kb.append([InlineKeyboardButton("⬅️ BACK", callback_data=back_target)])
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    except Exception as e:
+        logger.error(f"select_pair_cb error: {e}", exc_info=True)
+        await q.edit_message_text(f"❌ Analysis failed: {str(e)[:100]}",
+                                  reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")]]))
+
 # ── Manual Mode ──
 async def manual_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
         return
     q = update.callback_query
     await q.answer()
-    state = get_state(q.message.chat_id)
+    chat_id = q.message.chat_id
+    # Set back-context for pair detail
+    user_state.setdefault(chat_id, {})
+    user_state[chat_id]['pair_detail_back'] = 'manual_mode'
+    state = get_state(chat_id)
     state["mode"] = "manual"
     pairs = get_bingx_hot_pairs(limit=6)
     kb = []
@@ -1049,6 +1126,10 @@ async def add_pair_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     q = update.callback_query
     await q.answer()
+    chat_id = q.message.chat_id
+    # Set back-context for pair detail
+    user_state.setdefault(chat_id, {})
+    user_state[chat_id]['pair_detail_back'] = 'add_pair_menu'
     top = get_bingx_hot_pairs(limit=10)
     kb = []
     for i in range(0, len(top), 2):
@@ -1703,6 +1784,14 @@ async def error_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     logger.error(f"Exception: {error}", exc_info=error)
 
+async def set_commands(app: Application) -> None:
+    """Set restricted bot commands — only expose our custom trading commands."""
+    await app.bot.set_my_commands([
+        BotCommand("start", "Show main menu"),
+        BotCommand("cmd", "Show command center"),
+        BotCommand("scan", "AI scan of hot pairs"),
+    ])
+
 # ── Build & Run ──
 def main():
     if not TOKEN:
@@ -1713,15 +1802,7 @@ def main():
         logger.error("Cannot connect to Freqtrade API")
         return
     logger.info("Connected to Freqtrade API")
-    app = Application.builder().token(TOKEN).build()
-    # Restrict bot commands to only our custom trading commands (hide OpenClaw native commands)
-    async def set_commands(app: Application) -> None:
-        await app.bot.set_my_commands([
-            BotCommand("start", "Show main menu"),
-            BotCommand("cmd", "Show command center"),
-            BotCommand("scan", "AI scan of hot pairs"),
-        ])
-    app.post_init.append(set_commands)
+    app = Application.builder().token(TOKEN).post_init(set_commands).build()
     app.add_handler(CommandHandler(["start", "cmd"], start))
     app.add_handler(CommandHandler("scan", scan_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_input_handler))
@@ -1738,6 +1819,7 @@ def main():
     app.add_handler(CallbackQueryHandler(session_adjust_cb, pattern="^(lev|mar)_(up|down)$"))
     app.add_handler(CallbackQueryHandler(ai_scan_cb, pattern="^ai_scan$"))
     app.add_handler(CallbackQueryHandler(pair_detail_cb, pattern="^pair_"))
+    app.add_handler(CallbackQueryHandler(select_pair_cb, pattern="^select_"))
     app.add_handler(CallbackQueryHandler(manual_mode_cb, pattern="^manual_mode$"))
     app.add_handler(CallbackQueryHandler(add_pair_menu_cb, pattern="^add_pair_menu$"))
     app.add_handler(CallbackQueryHandler(other_pair_input_cb, pattern="^other_pair_input$"))
