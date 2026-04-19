@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import feedparser
 from dotenv import load_dotenv
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, error
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, error, BotCommand
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 # ── Trading Trivia Facts ──
@@ -1714,6 +1714,14 @@ def main():
         return
     logger.info("Connected to Freqtrade API")
     app = Application.builder().token(TOKEN).build()
+    # Restrict bot commands to only our custom trading commands (hide OpenClaw native commands)
+    async def set_commands(app: Application) -> None:
+        await app.bot.set_my_commands([
+            BotCommand("start", "Show main menu"),
+            BotCommand("cmd", "Show command center"),
+            BotCommand("scan", "AI scan of hot pairs"),
+        ])
+    app.post_init.append(set_commands)
     app.add_handler(CommandHandler(["start", "cmd"], start))
     app.add_handler(CommandHandler("scan", scan_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_input_handler))
