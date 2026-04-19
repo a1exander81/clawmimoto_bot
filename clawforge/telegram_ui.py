@@ -388,9 +388,50 @@ def analyze_pair(pair):
         "volume": volume,
         "confidence": confidence,
         "reasons": reasons,
-        "entry": 0, "sl": 0, "tp": 0, "rrr": 2.0,
-        "current_price": current_price
+        "current_price": current_price,
     }
+
+# ── Trade Parameter Enrichment ──
+def enrich_trade_params(pair_result, chat_id):
+    """Add concrete trade parameters (entry, sl, tp, rrr, sizing) based on user state and balance."""
+    state = get_state(chat_id)
+    real, mock = get_balance()
+    mode = state.get("trade_mode", "MOCK")
+    wallet = mock if mode == "MOCK" else (real or 0)
+    leverage = state.get("leverage", 50)
+    margin_pct = state.get("margin", 1.0)
+    direction = pair_result.get("direction", "LONG")
+    current_price = pair_result.get("current_price", 0)
+    if current_price <= 0:
+        return pair_result
+    # Strategy defaults: initial SL 25%, first TP 50% (RRR = 2.0)
+    risk_pct = 0.25
+    target_pct = 0.50
+    if direction == "LONG":
+        entry = current_price
+        sl = current_price * (1 - risk_pct)
+        tp = current_price * (1 + target_pct)
+    else:  # SHORT
+        entry = current_price
+        sl = current_price * (1 + risk_pct)
+        tp = current_price * (1 - target_pct)
+    rrr = target_pct / risk_pct
+    # Position sizing (using stake_amount = wallet * margin_pct/100)
+    stake_amount = wallet * (margin_pct / 100)
+    position_value = stake_amount * leverage
+    quantity = position_value / entry
+    pair_result.update({
+        "entry": round(entry, 4),
+        "sl": round(sl, 4),
+        "tp": round(tp, 4),
+        "rrr": round(rrr, 2),
+        "stake_amount": round(stake_amount, 2),
+        "position_value": round(position_value, 2),
+        "quantity": round(quantity, 6),
+        "margin_pct": margin_pct,
+        "leverage": leverage,
+    })
+    return pair_result
 
 # ── Multi-Exchange Ticker Fetchers ──
 def get_binance_ticker(symbol):
@@ -472,6 +513,54 @@ def format_balance(real, mock, mode):
     else:
         return f"{mock:.0f} CLUSDT"
 
+def get_balance_display(chat_id: int) -> str:
+    """Return a concise balance line for the current user state."""
+    state = get_state(chat_id)
+    real, mock = get_balance()
+    mode = state.get("trade_mode", "MOCK")
+    balance_str = format_balance(real, mock, mode)
+    margin_pct = state.get("margin", 2.0)
+    return f"💎 Balance: {balance_str} | Margin: {margin_pct:.1f}%"
+
+def enrich_trade_params(pair_result, chat_id):
+    """Add concrete trade parameters (entry, sl, tp, rrr, sizing) based on user state and balance."""
+    state = get_state(chat_id)
+    real, mock = get_balance()
+    mode = state.get("trade_mode", "MOCK")
+    wallet = mock if mode == "MOCK" else (real or 0)
+    leverage = state.get("leverage", 50)
+    margin_pct = state.get("margin", 1.0)
+    direction = pair_result.get("direction", "LONG")
+    current_price = pair_result.get("current_price", 0)
+    if current_price <= 0:
+        return pair_result
+    # Strategy defaults: initial SL 25%, first TP 50% (RRR = 2.0)
+    risk_pct = 0.25
+    target_pct = 0.50
+    if direction == "LONG":
+        sl = current_price * (1 - risk_pct)
+        tp = current_price * (1 + target_pct)
+    else:  # SHORT
+        sl = current_price * (1 + risk_pct)
+        tp = current_price * (1 - target_pct)
+    rrr = target_pct / risk_pct
+    # Position sizing
+    stake_amount = wallet * (margin_pct / 100)  # margin in USDT
+    position_value = stake_amount * leverage
+    quantity = position_value / current_price
+    pair_result.update({
+        "entry": round(current_price, 4),
+        "sl": round(sl, 4),
+        "tp": round(tp, 4),
+        "rrr": round(rrr, 2),
+        "stake_amount": round(stake_amount, 2),
+        "position_value": round(position_value, 2),
+        "quantity": round(quantity, 6),
+        "margin_pct": margin_pct,
+        "leverage": leverage,
+    })
+    return pair_result
+
 # ── Stats: wins & Gains ──
 def get_stats():
     s = api_get("/api/v1/stats") or {}
@@ -517,7 +606,7 @@ def call_stepfun_skill(prompt, retries=1):
             time.sleep(1)
     return None
 
-def ai_scan_pairs(custom_pairs=None):
+def ai_scan_pairs(custom_pairs=None, chat_id=None):
     """Scan hot pairs or custom list, get klines (with fallback), call StepFun, return top 4."""
     pairs_to_scan = custom_pairs if custom_pairs else get_bingx_hot_pairs(limit=6)
     results = []
@@ -529,18 +618,21 @@ def ai_scan_pairs(custom_pairs=None):
         klines_data = get_bingx_klines(symbol, interval="5m", limit=50)
         change = 0
         volume = 0
+        current_price = 0
         if klines_data and "data" in klines_data and len(klines_data["data"]) >= 2:
             closes = [float(k["close"]) for k in klines_data["data"][-10:]]
             if len(closes) >= 2:
                 change = (closes[-1] - closes[-2]) / closes[-2] * 100
             volume = sum(float(k["volume"]) for k in klines_data["data"][-5:])
+            current_price = closes[-1] if closes else 0
+        if current_price <= 0:
+            current_price, _ = get_binance_ticker(symbol)
         # AI reasoning
         prompt = f"Scalp analysis for {pair} 5M: change {change:.2f}%, volume {volume:.0f}. Give: direction (LONG/SHORT), confidence 80-90%, RRR 1.5-3.0, 3 reasons."
         ai_text = call_stepfun_skill(prompt)
         direction = "LONG" if change >= 0 else "SHORT"
         confidence = 85 if change >= 0 else 75
         reasons = ["High volume", "Momentum", "AI signal"]
-        entry = 0; sl = 0; tp = 0; rrr = 0
         if ai_text:
             ai_lower = ai_text.lower()
             if "short" in ai_lower:
@@ -550,15 +642,33 @@ def ai_scan_pairs(custom_pairs=None):
                     confidence = int(''.join(filter(str.isdigit, ai_text.split("confidence")[1].split("%")[0])))
                 except: pass
             reasons = [line.strip("- * ") for line in ai_text.split('\n') if line.strip()][:3] or reasons
-        results.append({
+        result = {
             "symbol": pair,
             "direction": direction,
             "change": round(change, 2),
             "volume": volume,
             "confidence": confidence,
             "reasons": reasons,
-            "entry": entry, "sl": sl, "tp": tp, "rrr": rrr
-        })
+            "current_price": current_price,
+        }
+        # Enrich with trade params if chat_id provided
+        if chat_id:
+            result = enrich_trade_params(result, chat_id)
+        else:
+            # Basic entry/sl/tp/rrr without sizing (using defaults)
+            risk_pct = 0.25; target_pct = 0.50
+            entry = current_price
+            if direction == "LONG":
+                sl = entry * (1 - risk_pct); tp = entry * (1 + target_pct)
+            else:
+                sl = entry * (1 + risk_pct); tp = entry * (1 - target_pct)
+            result.update({
+                "entry": round(entry, 4),
+                "sl": round(sl, 4),
+                "tp": round(tp, 4),
+                "rrr": round(target_pct/risk_pct, 2),
+            })
+        results.append(result)
     # Sort by confidence desc, take top 4
     results.sort(key=lambda x: x["confidence"], reverse=True)
     return results[:4]
@@ -609,6 +719,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     state = get_state(chat_id)
     news = get_market_news()
+    bal_line = get_balance_display(chat_id)
     kb = [
         [mode_button(state["trade_mode"])],
         [wins_button(), gains_button()],
@@ -616,7 +727,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 POSITIONS", callback_data="positions")],
         [InlineKeyboardButton("📈 MARKET NOW", callback_data="market_now")],
     ]
-    await update.message.reply_text(f"🏠 **Clawmimoto Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await update.message.reply_text(f"🏠 **Clawmimoto Command Center**\n\n{bal_line}\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
@@ -631,6 +742,7 @@ async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = q.message.chat_id
     state = get_state(chat_id)
     news = get_market_news()
+    bal_line = get_balance_display(chat_id)
     kb = [
         [mode_button(state["trade_mode"])],
         [wins_button(), gains_button()],
@@ -638,7 +750,7 @@ async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📊 POSITIONS", callback_data="positions")],
         [InlineKeyboardButton("📈 MARKET NOW", callback_data="market_now")],
     ]
-    await q.edit_message_text(f"🏠 **Clawmimoto Command Center**\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+    await q.edit_message_text(f"🏠 **Clawmimoto Command Center**\n\n{bal_line}\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
 async def toggle_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
@@ -808,6 +920,7 @@ async def market_now_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     q = update.callback_query
     await q.answer()
+    chat_id = q.message.chat_id
     # Define pairs: (display_label, bingx_symbol, binance_symbol, okx_symbol, coingecko_id)
     pairs = [
         ("BTC", "BTC-USDT", "BTCUSDT", "BTC-USDT", "bitcoin"),
@@ -815,7 +928,8 @@ async def market_now_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         ("SOL", "SOL-USDT", "SOLUSDT", "SOL-USDT", "solana"),
         ("BNB", "BNB-USDT", "BNBUSDT", "BNB-USDT", "binancecoin"),
     ]
-    message = "📈 Market Now\n\n"
+    bal_line = get_balance_display(chat_id)
+    message = "📈 Market Now\n\n" + bal_line + "\n\n"
     sources = {"BingX": False, "Binance": False, "OKX": False, "CoinGecko": False}
     for label, bingx_sym, binance_sym, okx_sym, cg_id in pairs:
         price = None
@@ -976,7 +1090,7 @@ async def ai_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     user_state.setdefault(chat_id, {})
     user_state[chat_id]['pair_detail_back'] = 'ai_scan'
     await q.edit_message_text("🔍 **AI scanning market...**\n\nFetching BingX hot pairs, analyzing 5M charts, order book, sentiment...")
-    pairs = ai_scan_pairs()
+    pairs = ai_scan_pairs(chat_id=chat_id)
     user_state[chat_id]["selected_pairs"] = pairs
     kb = grid_2x2(pairs) + [[InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")]]
     await q.edit_message_text("✅ **Scan Complete - Top 4 Pairs:**\n\nSelect a pair to view details & execute:", reply_markup=InlineKeyboardMarkup(kb))
@@ -994,32 +1108,44 @@ async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not p:
         await q.edit_message_text("❌ Pair data not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]]))
         return
+    state = get_state(chat_id)
     real, mock = get_balance()
     bal = format_balance(real, mock, state["trade_mode"])
-    margin_val = (10000 if state["trade_mode"] == "MOCK" else (real or 10000)) * (state["margin"] / 100)
-    # Confidence green squares
     conf = p["confidence"]
     greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
-    # Get real-time price (from result or fresh ticker)
     cur_price = p.get('current_price', 0)
     if not cur_price:
         try:
             symbol_clean = p['symbol'].replace('/', '')
             cur_price, _ = get_binance_ticker(symbol_clean)
         except: pass
+    # Enriched trade params
+    entry = p.get('entry', cur_price or 0)
+    sl = p.get('sl', 0)
+    tp = p.get('tp', 0)
+    rrr = p.get('rrr', 2.0)
+    stake = p.get('stake_amount', 0)
+    qty = p.get('quantity', 0)
+    lev = state['leverage']
+    # Direction arrow for SL/TP
+    if p['direction'] == 'LONG':
+        sl_pct = (sl/entry - 1)*100 if entry else 0
+        tp_pct = (tp/entry - 1)*100 if entry else 0
+    else:
+        sl_pct = (entry/sl - 1)*100 if sl else 0
+        tp_pct = (entry/tp - 1)*100 if tp else 0
     text = (f"📊 {p['symbol']} {p['direction']} {state['trade_mode']}\n\n"
             f"Balance: {bal}\n"
             f"Change: {p['change']:+.2f}%" + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "") + "\n"
             f"Reasons: {' | '.join(p['reasons'])}\n"
-            f"Leverage: {state['leverage']}x  |  Margin: {state['margin']}%  (${margin_val:,.0f})\n"
-            f"Entry: market  |  SL: TBD  |  TP: TBD  |  RRR: {p.get('rrr', 2.0):.1f}\n"
+            f"Leverage: {lev}x  |  Margin: {state['margin']}%  (${stake:,.0f})\n"
+            f"Entry: ${entry:,.4f}  |  SL: ${sl:,.4f} ({sl_pct:+.1f}%)  |  TP: ${tp:,.4f} ({tp_pct:+.1f}%)\n"
+            f"RRR: {rrr:.1f}  |  Qty: {qty:.6f}\n"
             f"Confidence: {conf}% {greens} 🦞")
     kb = []
-    # Only show EXECUTE if pair is valid on exchange (admins bypass)
     user_id = update.effective_user.id
     if is_pair_valid_for_user(p['symbol'], user_id):
         kb.append([InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")])
-    # Add SET ALERT button with current price
     try:
         symbol_clean = p['symbol'].replace('/', '')
         cur_price, _ = get_binance_ticker(symbol_clean)
@@ -1053,6 +1179,9 @@ async def select_pair_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         result.setdefault('reasons', ['Volume spike', 'Momentum'])
         result.setdefault('current_price', 0)
         
+        # Enrich with trade parameters (entry, sl, tp, rrr, sizing)
+        result = enrich_trade_params(result, chat_id)
+        
         # Store in user_state
         user_state.setdefault(chat_id, {"selected_pairs": []})
         user_state[chat_id]['selected_pairs'] = [result]
@@ -1064,7 +1193,6 @@ async def select_pair_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         state = get_state(chat_id)
         real, mock = get_balance()
         bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
-        margin_val = (10000 if state["trade_mode"] == "MOCK" else (real or 10000)) * (state["margin"] / 100)
         conf = result['confidence']
         greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
         cur_price = result.get('current_price', 0)
@@ -1073,14 +1201,30 @@ async def select_pair_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 symbol_clean = result['symbol'].replace('/', '')
                 cur_price, _ = get_binance_ticker(symbol_clean)
             except: pass
+        # Build detailed text
+        entry = result.get('entry', cur_price or 0)
+        sl = result.get('sl', 0)
+        tp = result.get('tp', 0)
+        rrr = result.get('rrr', 2.0)
+        stake = result.get('stake_amount', 0)
+        qty = result.get('quantity', 0)
+        lev = state['leverage']
+        # Direction arrow for SL/TP
+        if result['direction'] == 'LONG':
+            sl_pct = (sl/entry - 1)*100 if entry else 0
+            tp_pct = (tp/entry - 1)*100 if entry else 0
+        else:
+            sl_pct = (entry/sl - 1)*100 if sl else 0
+            tp_pct = (entry/tp - 1)*100 if tp else 0
         text = (f"📊 {result['symbol']} {result['direction']} {state['trade_mode']}\n\n"
                 f"Balance: {bal}\n"
                 f"Change: {result['change']:+.2f}%"
                 + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "")
                 + "\n"
                 f"Reasons: {' | '.join(result['reasons'])}\n"
-                f"Leverage: {state['leverage']}x  |  Margin: {state['margin']}%  (${margin_val:,.0f})\n"
-                f"Entry: market  |  SL: TBD  |  TP: TBD  |  RRR: {result.get('rrr', 2.0):.1f}\n"
+                f"Leverage: {lev}x  |  Margin: {state['margin']}%  (${stake:,.0f})\n"
+                f"Entry: ${entry:,.4f}  |  SL: ${sl:,.4f} ({sl_pct:+.1f}%)  |  TP: ${tp:,.4f} ({tp_pct:+.1f}%)\n"
+                f"RRR: {rrr:.1f}  |  Qty: {qty:.6f}\n"
                 f"Confidence: {conf}% {greens} 🦞")
         kb = []
         user_id = update.effective_user.id
@@ -1189,6 +1333,8 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 result.setdefault('confidence', 85)
                 result.setdefault('reasons', ['High volume', 'Momentum', 'AI signal'])
                 result.setdefault('current_price', 0)
+                # Enrich with trade parameters (entry, sl, tp, rrr, sizing)
+                result = enrich_trade_params(result, chat_id)
                 user_state[chat_id]['selected_pairs'] = [result]
             except Exception as e:
                 logger.error(f"Analysis failed for {pair}: {e}", exc_info=True)
@@ -1203,7 +1349,6 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # Show detail view
             real, mock = get_balance()
             bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
-            margin_val = (10000 if state.get("trade_mode", "MOCK") == "MOCK" else (real or 10000)) * (state.get("margin", 1) / 100)
             conf = result["confidence"]
             greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
             # Get real-time price
@@ -1214,15 +1359,29 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 if ticker_price and ticker_price > 0:
                     cur_price = ticker_price
             except: pass
+            # Enriched trade params (already enriched)
+            entry = result.get('entry', cur_price or 0)
+            sl = result.get('sl', 0)
+            tp = result.get('tp', 0)
+            rrr = result.get('rrr', 2.0)
+            stake = result.get('stake_amount', 0)
+            qty = result.get('quantity', 0)
+            lev = state.get('leverage', 50)
+            if result['direction'] == 'LONG':
+                sl_pct = (sl/entry - 1)*100 if entry else 0
+                tp_pct = (tp/entry - 1)*100 if entry else 0
+            else:
+                sl_pct = (entry/sl - 1)*100 if sl else 0
+                tp_pct = (entry/tp - 1)*100 if tp else 0
             text_msg = (f"📊 {result['symbol']} {result['direction']} {state.get('trade_mode','MOCK')}\n\n"
                         f"Balance: {bal}\n"
                         f"Change: {result['change']:+.2f}%" + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "") + "\n"
                         f"Reasons: {' | '.join(result['reasons'])}\n"
-                        f"Leverage: {state.get('leverage',50)}x  |  Margin: {state.get('margin',1)}%  (${margin_val:,.0f})\n"
-                        f"Entry: market  |  SL: TBD  |  TP: TBD  |  RRR: {result.get('rrr',2.0):.1f}\n"
+                        f"Leverage: {lev}x  |  Margin: {state.get('margin',1)}%  (${stake:,.0f})\n"
+                        f"Entry: ${entry:,.4f}  |  SL: ${sl:,.4f} ({sl_pct:+.1f}%)  |  TP: ${tp:,.4f} ({tp_pct:+.1f}%)\n"
+                        f"RRR: {rrr:.1f}  |  Qty: {qty:.6f}\n"
                         f"Confidence: {conf}% {greens} 🦞")
             kb = [[InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")]]
-            # Add SET ALERT button with current price
             if cur_price and cur_price > 0:
                 kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {result['symbol']} {cur_price:.2f}")])
             await update.message.reply_text(text_msg, reply_markup=InlineKeyboardMarkup(kb))
@@ -1252,6 +1411,8 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 result.setdefault('confidence', 85)
                 result.setdefault('reasons', ['High volume', 'Momentum', 'AI signal'])
                 result.setdefault('current_price', 0)
+                # Enrich with trade parameters (entry, sl, tp, rrr, sizing)
+                result = enrich_trade_params(result, chat_id)
                 user_state[chat_id]['selected_pairs'] = [result]
             except Exception as e:
                 logger.error(f"Analysis failed for {pair}: {e}", exc_info=True)
@@ -1264,9 +1425,9 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             # Show detail view
             real, mock = get_balance()
             bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
-            margin_val = (10000 if state.get("trade_mode", "MOCK") == "MOCK" else (real or 10000)) * (state.get("margin", 1) / 100)
             conf = result["confidence"]
             greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
+            # Get real-time price
             symbol_clean = result['symbol'].replace('/', '')
             cur_price = result.get('current_price', 0)
             try:
@@ -1274,12 +1435,27 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 if ticker_price and ticker_price > 0:
                     cur_price = ticker_price
             except: pass
+            # Enriched trade params (already enriched)
+            entry = result.get('entry', cur_price or 0)
+            sl = result.get('sl', 0)
+            tp = result.get('tp', 0)
+            rrr = result.get('rrr', 2.0)
+            stake = result.get('stake_amount', 0)
+            qty = result.get('quantity', 0)
+            lev = state.get('leverage', 50)
+            if result['direction'] == 'LONG':
+                sl_pct = (sl/entry - 1)*100 if entry else 0
+                tp_pct = (tp/entry - 1)*100 if entry else 0
+            else:
+                sl_pct = (entry/sl - 1)*100 if sl else 0
+                tp_pct = (entry/tp - 1)*100 if tp else 0
             text_msg = (f"📊 {result['symbol']} {result['direction']} {state.get('trade_mode','MOCK')}\n\n"
                         f"Balance: {bal}\n"
                         f"Change: {result['change']:+.2f}%" + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "") + "\n"
                         f"Reasons: {' | '.join(result['reasons'])}\n"
-                        f"Leverage: {state.get('leverage',50)}x  |  Margin: {state.get('margin',1)}%  (${margin_val:,.0f})\n"
-                        f"Entry: market  |  SL: TBD  |  TP: TBD  |  RRR: {result.get('rrr',2.0):.1f}\n"
+                        f"Leverage: {lev}x  |  Margin: {state.get('margin',1)}%  (${stake:,.0f})\n"
+                        f"Entry: ${entry:,.4f}  |  SL: ${sl:,.4f} ({sl_pct:+.1f}%)  |  TP: ${tp:,.4f} ({tp_pct:+.1f}%)\n"
+                        f"RRR: {rrr:.1f}  |  Qty: {qty:.6f}\n"
                         f"Confidence: {conf}% {greens} 🦞")
             kb = [[InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")]]
             if cur_price and cur_price > 0:
@@ -1368,16 +1544,17 @@ async def positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     trades = api_get("/api/v1/trades?status=open")
+    bal = get_balance_display(chat_id)
     if not trades or not trades.get("trades"):
-        await q.edit_message_text("📊 **No open positions**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
+        await q.edit_message_text(f"📊 **No open positions**\n\n{bal}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
         return
-    
+
     # Build 2x3 grid for first 6 pairs
     buttons = []
     trade_list = trades["trades"]
     visible_trades = trade_list[:6]
     extra_trades = trade_list[6:]
-    
+
     # Create 2-column rows from visible trades
     for i in range(0, len(visible_trades), 2):
         row = []
@@ -1386,14 +1563,14 @@ async def positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             btn_text = f"📌 {t['pair']} {profit:+.1f}%"
             row.append(InlineKeyboardButton(btn_text, callback_data=f"pos_{t['trade_id']}"))
         buttons.append(row)
-    
+
     # Add OTHER TRADES button if there are more than 6
     if extra_trades:
         buttons.append([InlineKeyboardButton("📋 OTHER TRADES", callback_data="other_positions")])
-    
+
     buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="refresh_positions")])
     buttons.append([InlineKeyboardButton("⬅️ BACK", callback_data="main")])
-    await q.edit_message_text("📊 **Open Positions**\n\nSelect one:", reply_markup=InlineKeyboardMarkup(buttons))
+    await q.edit_message_text(f"📊 **Open Positions**\n\n{bal}\n\nSelect one:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def refresh_positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Refresh the positions list (called from Refresh button)."""
@@ -1401,9 +1578,11 @@ async def refresh_positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     q = update.callback_query
     await q.answer("🔄 Refreshing...")
+    chat_id = q.message.chat_id
     trades = api_get("/api/v1/trades?status=open")
+    bal = get_balance_display(chat_id)
     if not trades or not trades.get("trades"):
-        await q.edit_message_text("📊 **No open positions**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
+        await q.edit_message_text(f"📊 **No open positions**\n\n{bal}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
         return
     buttons = []
     for t in trades["trades"]:
@@ -1412,7 +1591,7 @@ async def refresh_positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         buttons.append([InlineKeyboardButton(btn_text, callback_data=f"pos_{t['trade_id']}")])
     buttons.append([InlineKeyboardButton("🔄 Refresh", callback_data="refresh_positions")])
     buttons.append([InlineKeyboardButton("⬅️ BACK", callback_data="main")])
-    await q.edit_message_text("📊 **Open Positions**\n\nSelect one:", reply_markup=InlineKeyboardMarkup(buttons))
+    await q.edit_message_text(f"📊 **Open Positions**\n\n{bal}\n\nSelect one:", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def other_positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Show additional positions beyond the first 6 (overflow list)."""
@@ -1427,8 +1606,9 @@ async def other_positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     
     # Get trades from index 6 onward
     extra_trades = trades["trades"][6:]
+    bal = get_balance_display(chat_id)
     if not extra_trades:
-        await q.edit_message_text("📊 **No other positions**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="positions")]]))
+        await q.edit_message_text(f"📊 **No other positions**\n\n{bal}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="positions")]]))
         return
     buttons = []
     for t in extra_trades:
@@ -1436,7 +1616,7 @@ async def other_positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         btn_text = f"📌 {t['pair']} {profit:+.1f}%"
         buttons.append([InlineKeyboardButton(btn_text, callback_data=f"pos_{t['trade_id']}")])
     buttons.append([InlineKeyboardButton("⬅️ BACK TO LIST", callback_data="positions")])
-    await q.edit_message_text(f"📋 **Other Positions** ({len(extra_trades)} more)", reply_markup=InlineKeyboardMarkup(buttons))
+    await q.edit_message_text(f"📋 **Other Positions** ({len(extra_trades)} more)\n\n{bal}", reply_markup=InlineKeyboardMarkup(buttons))
 
 async def pos_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
