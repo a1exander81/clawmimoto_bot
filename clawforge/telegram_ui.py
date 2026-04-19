@@ -20,6 +20,7 @@ from pathlib import Path
 import feedparser
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, error, BotCommand
+from telegram.error import BadRequest, TelegramError
 import psutil
 import subprocess
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
@@ -2311,11 +2312,11 @@ async def custom_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── Error handler ──
 async def error_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
-    error = ctx.error
+    exc = ctx.error
     # Ignore benign Telegram errors
-    if isinstance(error, error.BadRequest) and "Message is not modified" in str(error):
+    if isinstance(exc, BadRequest) and "Message is not modified" in str(exc):
         return
-    logger.error(f"Exception: {error}", exc_info=error)
+    logger.error(f"Exception: {exc}", exc_info=exc)
 
 async def set_commands(app: Application) -> None:
     """Set restricted bot commands — only expose our custom trading commands."""
