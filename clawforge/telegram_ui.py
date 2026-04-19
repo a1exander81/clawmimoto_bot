@@ -298,37 +298,50 @@ def bingx_signed_request(method, endpoint, params=None):
         return None
 
 def get_bingx_hot_pairs(limit=5):
-    """Fetch top hot pairs from BingX ticker with Binance fallback."""
+    """Fetch top hot pairs from BingX ticker — USDT-margined only."""
     try:
         data = bingx_signed_request("GET", "/openApi/swap/v2/quote/ticker", timeout=5)
         if data and "data" in data:
             pairs = []
-            for item in data["data"][:limit]:
+            for item in data["data"]:
                 symbol = item.get("symbol", "").upper()
-                # BingX uses BTC-USDT format; convert to BTC/USDT for display
+                # BingX uses BTC-USDT format; convert to BTC/USDT
                 symbol = symbol.replace("-", "/")
-                pairs.append(symbol)
-            logger.info(f"BingX hot pairs: {pairs}")
-            return pairs
+                # **USDT-margined perpetuals only**
+                if symbol.endswith("/USDT"):
+                    pairs.append(symbol)
+                if len(pairs) >= limit:
+                    break
+            logger.info(f"BingX USDT hot pairs: {pairs}")
+            if pairs:
+                return pairs
     except Exception as e:
         logger.debug(f"BingX hot pairs error: {e}")
-    # Fallback to Binance 24hr gainers
+    # Fallback to Binance 24hr gainers (USDT pairs only)
     try:
         r = requests.get("https://api.binance.com/api/v3/ticker/24hr", timeout=5)
         if r.status_code == 200:
             data = r.json()
-            # Sort by percentChange descending, exclude stablecoins
             stable = ["USDT", "USDC", "BUSD", "DAI"]
-            filtered = [d for d in data if not any(s in d.get("symbol", "") for s in stable)]
+            # Only USDT pairs, exclude stablecoins
+            filtered = [d for d in data if d.get("symbol", "").endswith("USDT") and not any(s in d.get("symbol", "") for s in stable)]
             filtered.sort(key=lambda x: float(x.get("priceChangePercent", 0)), reverse=True)
-            pairs = [f"{d['symbol'][:-4]}/{d['symbol'][-4:]}" for d in filtered[:limit]]
-            logger.info(f"Binance fallback hot pairs: {pairs}")
-            return pairs
+            pairs = []
+            for d in filtered:
+                sym = d['symbol']
+                if len(sym) >= 4 and sym.endswith("USDT"):
+                    base = sym[:-4]
+                    pairs.append(f"{base}/USDT")
+                if len(pairs) >= limit:
+                    break
+            logger.info(f"Binance fallback USDT pairs: {pairs}")
+            if pairs:
+                return pairs
     except Exception as e:
         logger.debug(f"Binance fallback error: {e}")
-    # Ultimate fallback
+    # Ultimate fallback — USDT only
     fallback = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"][:limit]
-    logger.warning("All hot pair sources failed, using hardcoded list")
+    logger.warning("All hot pair sources failed, using USDT-only hardcoded list")
     return fallback
 
 def get_bingx_klines(symbol, interval="5m", limit=50):
