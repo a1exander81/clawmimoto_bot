@@ -1,0 +1,1 @@
+./watchdog.sh: line 33: 77279 Killed                  sudo -u node nohup python3 -u -m clawforge.telegram_ui > "$BOT_DIR/logs/telegram_ui.log" 2>&1

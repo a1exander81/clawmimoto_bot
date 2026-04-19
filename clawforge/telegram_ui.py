@@ -1699,7 +1699,7 @@ async def custom_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 async def error_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     error = ctx.error
     # Ignore benign Telegram errors
-    if isinstance(error, telegram.error.BadRequest) and "Message is not modified" in str(error):
+    if isinstance(error, error.BadRequest) and "Message is not modified" in str(error):
         return
     logger.error(f"Exception: {error}", exc_info=error)
 
