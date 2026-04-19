@@ -1772,7 +1772,7 @@ async def pos_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"Balance: {bal}\n"
             f"Time: {t.get('open_date','')}"
             + (f" (closed: {t.get('close_date','')})" if not is_open else "") + "\n"
-            f"Margin: ${t.get('stake_amount',0):,.2f}  |  {pnl_line}\n"
+            f"Margin: ${t.get('stake_amount',0):,.2f}  |  Leverage: {t.get('leverage','N/A')}x  |  {pnl_line}\n"
             f"Entry: {t.get('open_rate',0):,.2f}  |  SL: {sl_pct:.1f}%  |  TP: {tp_display}"
             + (f"\n{exit_line}" if exit_line else "") + "\n")
     kb = [
