@@ -566,9 +566,9 @@ def enrich_trade_params(pair_result, chat_id):
     current_price = pair_result.get("current_price", 0)
     if current_price <= 0:
         return pair_result
-    # Strategy defaults: initial SL 25%, first TP 50% (RRR = 2.0)
-    risk_pct = 0.25
-    target_pct = 0.50
+    # Strategy defaults: initial SL 5%, first TP 10% (RRR = 2.0)
+    risk_pct = 0.05
+    target_pct = 0.10
     if direction == "LONG":
         sl = current_price * (1 - risk_pct)
         tp = current_price * (1 + target_pct)
@@ -696,7 +696,7 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None):
             result = enrich_trade_params(result, chat_id)
         else:
             # Basic entry/sl/tp/rrr without sizing (using defaults)
-            risk_pct = 0.25; target_pct = 0.50
+            risk_pct = 0.05; target_pct = 0.10
             entry = current_price
             if direction == "LONG":
                 sl = entry * (1 - risk_pct); tp = entry * (1 + target_pct)

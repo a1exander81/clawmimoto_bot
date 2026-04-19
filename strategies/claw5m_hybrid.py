@@ -24,12 +24,12 @@ class Claw5MHybrid(IStrategy):
 
     # ── Risk Management ──
     max_open_trades = 3
-    stoploss = -0.25
+    stoploss = -0.05
     trailing_stop = True
     trailing_stop_positive = 0.02
-    trailing_stop_positive_offset = 0.5
+    trailing_stop_positive_offset = 0.10
     trailing_only_offset_is_reached = True
-    minimal_roi = {"0": 1.0}
+    minimal_roi = {"0": 0.10}
 
     # Use custom leverage() method
     use_custom_leverage = True
@@ -206,11 +206,17 @@ class Claw5MHybrid(IStrategy):
 
     def custom_stoploss(self, pair: str, trade: 'Trade', current_time: datetime,
                         current_rate: float, current_profit: float, **kwargs) -> float:
-        if current_profit >= 0.50:
-            return -0.25
-        elif current_profit >= 0.30:
+        """Three-phase stoploss:
+        - <10% profit: fixed -5% SL
+        - 10%–20% profit: move to breakeven
+        - >=20% profit: let trailing take over (trail offset 1%, activation 20%)
+        """
+        if current_profit >= 0.20:
+            return -0.25  # far away; trailing handles it
+        elif current_profit >= 0.10:
+            # Move SL to breakeven (entry price)
             return (trade.open_rate - current_rate) / current_rate
-        return self.stoploss
+        return self.stoploss  # -0.05
 
     def custom_exit(self, pair: str, trade: 'Trade', current_time: datetime,
                     current_rate: float, current_profit: float, **kwargs) -> Optional[str]:
