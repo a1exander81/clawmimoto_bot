@@ -1646,6 +1646,7 @@ async def other_positions_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     trades = api_get("/api/v1/trades?status=open")
+    chat_id = q.message.chat_id
     if not trades or not trades.get("trades"):
         await q.edit_message_text("📊 **No open positions**", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="positions")]]))
         return
