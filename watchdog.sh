@@ -13,18 +13,18 @@ while true; do
     # Check Freqtrade
     if ! pgrep -f "freqtrade trade" > /dev/null; then
         echo "$(date): Freqtrade down — restarting..." >> "$LOG_FILE"
-        sudo -u node nohup python3 -m freqtrade trade --dry-run \
-            --config "$FREQTRADE_DIR/configs/config.json" \
-            --config "$FREQTRADE_DIR/configs/config.local.json" \
-            --strategy Claw5MSniper > "$FREQTRADE_DIR/logs/freqtrade.log" 2>&1 &
+        cd "$FREQTRADE_DIR" && sudo -u node nohup python3 -m freqtrade trade --dry-run \
+            --config "configs/config.json" \
+            --config "configs/config.local.json" \
+            --strategy Claw5MSniper > "logs/freqtrade.log" 2>&1 &
         sleep 10
     fi
 
     # Check Telegram bot
     if ! pgrep -f "clawforge.telegram_ui" > /dev/null; then
         echo "$(date): Telegram bot down — restarting..." >> "$LOG_FILE"
-        sudo -u node nohup python3 -u -m clawforge.telegram_ui \
-            > "$BOT_DIR/logs/telegram_ui.log" 2>&1 &
+        cd "$BOT_DIR" && sudo -u node nohup python3 -u -m clawforge.telegram_ui \
+            > logs/telegram_ui.log 2>&1 &
         sleep 5
     fi
 

@@ -2247,15 +2247,33 @@ async def set_commands(app: Application) -> None:
         BotCommand("profit", "Show P&L summary"),
         BotCommand("daily", "Today's trading summary"),
     ])
+    # Send startup notification to admin
+    admin_id = os.getenv("ADMIN_TELEGRAM_ID", "7093901111")
+    try:
+        await app.bot.send_message(
+            chat_id=admin_id,
+            text="✅ *Clawmimoto Bot online*\n\nFreqtrade API connected. All systems go.",
+            parse_mode="Markdown"
+        )
+    except Exception as e:
+        logger.debug(f"Startup notification failed: {e}")
 
 # ── Build & Run ──
 def main():
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not set")
         return
-    test = api_get("/api/v1/ping")
-    if not test:
-        logger.error("Cannot connect to Freqtrade API")
+    # Wait for Freqtrade API to become available (retry up to 10 times)
+    max_tries = 10
+    for i in range(max_tries):
+        test = api_get("/api/v1/ping")
+        if test:
+            logger.info("Connected to Freqtrade API")
+            break
+        logger.warning(f"Freqtrade API not reachable (attempt {i+1}/{max_tries}), retrying in 5s...")
+        time.sleep(5)
+    else:
+        logger.error("Cannot connect to Freqtrade API after retries — exiting")
         return
     logger.info("Connected to Freqtrade API")
     app = Application.builder().token(TOKEN).post_init(set_commands).build()
