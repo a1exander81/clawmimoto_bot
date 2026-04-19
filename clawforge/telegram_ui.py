@@ -1092,7 +1092,10 @@ async def ai_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text("🔍 **AI scanning market...**\n\nFetching BingX hot pairs, analyzing 5M charts, order book, sentiment...")
     pairs = ai_scan_pairs(chat_id=chat_id)
     user_state[chat_id]["selected_pairs"] = pairs
-    kb = grid_2x2(pairs) + [[InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")]]
+    kb = grid_2x2(pairs) + [[
+        InlineKeyboardButton("🔄 REFRESH", callback_data="refresh_scan"),
+        InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")
+    ]]
     await q.edit_message_text("✅ **Scan Complete - Top 4 Pairs:**\n\nSelect a pair to view details & execute:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1134,6 +1137,8 @@ async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         sl_pct = (entry/sl - 1)*100 if sl else 0
         tp_pct = (entry/tp - 1)*100 if tp else 0
+    # Projected P&L if TP hit
+    proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
     text = (f"📊 {p['symbol']} {p['direction']} {state['trade_mode']}\n\n"
             f"Balance: {bal}\n"
             f"Change: {p['change']:+.2f}%" + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "") + "\n"
@@ -1141,6 +1146,8 @@ async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             f"Leverage: {lev}x  |  Margin: {state['margin']}%  (${stake:,.0f})\n"
             f"Entry: ${entry:,.4f}  |  SL: ${sl:,.4f} ({sl_pct:+.1f}%)  |  TP: ${tp:,.4f} ({tp_pct:+.1f}%)\n"
             f"RRR: {rrr:.1f}  |  Qty: {qty:.6f}\n"
+            f"Projected TP P&L: ${proj_profit:,.2f} (+{tp_pct:.1f}%)\n"
+            f"Trailing: activates +50%, offset 2%\n"
             f"Confidence: {conf}% {greens} 🦞")
     kb = []
     user_id = update.effective_user.id
@@ -1153,6 +1160,7 @@ async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {p['symbol']} {cur_price:.2f}")])
     except Exception as e:
         logger.debug(f"Alert price fetch failed: {e}")
+    kb.append([InlineKeyboardButton("🔄 REFRESH", callback_data=f"refresh_pair_{p['symbol']}")])
     kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")])
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -1216,6 +1224,8 @@ async def select_pair_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             sl_pct = (entry/sl - 1)*100 if sl else 0
             tp_pct = (entry/tp - 1)*100 if tp else 0
+        # Projected P&L if TP hit
+        proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
         text = (f"📊 {result['symbol']} {result['direction']} {state['trade_mode']}\n\n"
                 f"Balance: {bal}\n"
                 f"Change: {result['change']:+.2f}%"
@@ -1225,6 +1235,8 @@ async def select_pair_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 f"Leverage: {lev}x  |  Margin: {state['margin']}%  (${stake:,.0f})\n"
                 f"Entry: ${entry:,.4f}  |  SL: ${sl:,.4f} ({sl_pct:+.1f}%)  |  TP: ${tp:,.4f} ({tp_pct:+.1f}%)\n"
                 f"RRR: {rrr:.1f}  |  Qty: {qty:.6f}\n"
+                f"Projected TP P&L: ${proj_profit:,.2f} (+{tp_pct:.1f}%)\n"
+                f"Trailing: activates +50%, offset 2%\n"
                 f"Confidence: {conf}% {greens} 🦞")
         kb = []
         user_id = update.effective_user.id
@@ -1237,6 +1249,7 @@ async def select_pair_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {result['symbol']} {cur_price:.2f}")])
         except Exception as e:
             logger.debug(f"Alert price fetch failed: {e}")
+        kb.append([InlineKeyboardButton("🔄 REFRESH", callback_data=f"refresh_pair_{result['symbol']}")])
         kb.append([InlineKeyboardButton("⬅️ BACK", callback_data=back_target)])
         await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
     except Exception as e:
@@ -1336,6 +1349,8 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 # Enrich with trade parameters (entry, sl, tp, rrr, sizing)
                 result = enrich_trade_params(result, chat_id)
                 user_state[chat_id]['selected_pairs'] = [result]
+
+                user_state.setdefault(chat_id, {})['pair_detail_back'] = 'main'
             except Exception as e:
                 logger.error(f"Analysis failed for {pair}: {e}", exc_info=True)
                 await update.message.reply_text(
@@ -1373,6 +1388,8 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 sl_pct = (entry/sl - 1)*100 if sl else 0
                 tp_pct = (entry/tp - 1)*100 if tp else 0
+            # Projected P&L if TP hit
+            proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
             text_msg = (f"📊 {result['symbol']} {result['direction']} {state.get('trade_mode','MOCK')}\n\n"
                         f"Balance: {bal}\n"
                         f"Change: {result['change']:+.2f}%" + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "") + "\n"
@@ -1380,10 +1397,13 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         f"Leverage: {lev}x  |  Margin: {state.get('margin',1)}%  (${stake:,.0f})\n"
                         f"Entry: ${entry:,.4f}  |  SL: ${sl:,.4f} ({sl_pct:+.1f}%)  |  TP: ${tp:,.4f} ({tp_pct:+.1f}%)\n"
                         f"RRR: {rrr:.1f}  |  Qty: {qty:.6f}\n"
+                        f"Projected TP P&L: ${proj_profit:,.2f} (+{tp_pct:.1f}%)\n"
+                        f"Trailing: activates +50%, offset 2%\n"
                         f"Confidence: {conf}% {greens} 🦞")
             kb = [[InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")]]
             if cur_price and cur_price > 0:
                 kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {result['symbol']} {cur_price:.2f}")])
+            kb.append([InlineKeyboardButton("🔄 REFRESH", callback_data=f"refresh_pair_{result['symbol']}")])
             await update.message.reply_text(text_msg, reply_markup=InlineKeyboardMarkup(kb))
             return
         else:
@@ -1414,6 +1434,8 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 # Enrich with trade parameters (entry, sl, tp, rrr, sizing)
                 result = enrich_trade_params(result, chat_id)
                 user_state[chat_id]['selected_pairs'] = [result]
+
+                user_state.setdefault(chat_id, {})['pair_detail_back'] = 'main'
             except Exception as e:
                 logger.error(f"Analysis failed for {pair}: {e}", exc_info=True)
                 await update.message.reply_text(
@@ -1449,6 +1471,8 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             else:
                 sl_pct = (entry/sl - 1)*100 if sl else 0
                 tp_pct = (entry/tp - 1)*100 if tp else 0
+            # Projected P&L if TP hit
+            proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
             text_msg = (f"📊 {result['symbol']} {result['direction']} {state.get('trade_mode','MOCK')}\n\n"
                         f"Balance: {bal}\n"
                         f"Change: {result['change']:+.2f}%" + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "") + "\n"
@@ -1456,10 +1480,13 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                         f"Leverage: {lev}x  |  Margin: {state.get('margin',1)}%  (${stake:,.0f})\n"
                         f"Entry: ${entry:,.4f}  |  SL: ${sl:,.4f} ({sl_pct:+.1f}%)  |  TP: ${tp:,.4f} ({tp_pct:+.1f}%)\n"
                         f"RRR: {rrr:.1f}  |  Qty: {qty:.6f}\n"
+                        f"Projected TP P&L: ${proj_profit:,.2f} (+{tp_pct:.1f}%)\n"
+                        f"Trailing: activates +50%, offset 2%\n"
                         f"Confidence: {conf}% {greens} 🦞")
             kb = [[InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")]]
             if cur_price and cur_price > 0:
                 kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {result['symbol']} {cur_price:.2f}")])
+            kb.append([InlineKeyboardButton("🔄 REFRESH", callback_data=f"refresh_pair_{result['symbol']}")])
             await update.message.reply_text(text_msg, reply_markup=InlineKeyboardMarkup(kb))
             return
 
@@ -2119,7 +2146,7 @@ async def send_scan_message(chat_id, setups, context):
             price_str = f" @ ${p['current_price']:,.2f}"
         text += f"{i}. {p['symbol']} {p['direction']} - {p['change']:+.2f}%{price_str} | Conf: {p['confidence']}%\n"
     kb = grid_2x2(setups)
-    kb.append([InlineKeyboardButton("🔄 Refresh Scan", callback_data="/scan")])
+    kb.append([InlineKeyboardButton("🔄 REFRESH", callback_data="refresh_scan")])
     kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")])
     await context.bot.send_message(chat_id=chat_id, text=text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -2265,7 +2292,8 @@ def main():
     app.add_handler(CallbackQueryHandler(market_now_cb, pattern="^market_now$"))
     app.add_handler(CallbackQueryHandler(confirm_exec_cb, pattern="^confirm_"))
     app.add_handler(CallbackQueryHandler(alert_set_callback, pattern=r'^/alert '))
-    app.add_handler(CallbackQueryHandler(refresh_scan_callback, pattern=r'^/scan$'))
+    app.add_handler(CallbackQueryHandler(refresh_scan_callback, pattern=r'^refresh_scan$'))
+    app.add_handler(CallbackQueryHandler(refresh_pair_detail_cb, pattern=r'^refresh_pair_'))
     app.add_error_handler(error_handler)
     logger.info("Starting Clawmimoto Telegram UI...")
     # Start background snapshot thread (every 4 hours)
@@ -2302,3 +2330,81 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+# ── Refresh Pair Detail ──
+async def refresh_pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Refresh analysis for a pair from detail view."""
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
+    q = update.callback_query
+    await q.answer("🔄 Refreshing analysis...")
+    chat_id = q.message.chat_id
+    # Extract symbol from callback data: refresh_pair_BTC/USDT
+    symbol = q.data.split("_", 2)[2]
+    # Re-analyze
+    try:
+        result = analyze_pair(symbol)
+        result.setdefault('symbol', symbol)
+        result.setdefault('direction', 'LONG')
+        result.setdefault('change', 0.0)
+        result.setdefault('confidence', 85)
+        result.setdefault('reasons', ['Volume spike', 'Momentum'])
+        result.setdefault('current_price', 0)
+        result = enrich_trade_params(result, chat_id)
+        # Update selected_pairs
+        user_state.setdefault(chat_id, {"selected_pairs": []})
+        user_state[chat_id]['selected_pairs'] = [result]
+        # Render detail (same as select_pair_cb rendering)
+        state = get_state(chat_id)
+        real, mock = get_balance()
+        bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
+        conf = result['confidence']
+        greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
+        cur_price = result.get('current_price', 0)
+        if not cur_price:
+            try:
+                symbol_clean = result['symbol'].replace('/', '')
+                cur_price, _ = get_binance_ticker(symbol_clean)
+            except: pass
+        entry = result.get('entry', cur_price or 0)
+        sl = result.get('sl', 0)
+        tp = result.get('tp', 0)
+        rrr = result.get('rrr', 2.0)
+        stake = result.get('stake_amount', 0)
+        qty = result.get('quantity', 0)
+        lev = state['leverage']
+        if result['direction'] == 'LONG':
+            sl_pct = (sl/entry - 1)*100 if entry else 0
+            tp_pct = (tp/entry - 1)*100 if entry else 0
+        else:
+            sl_pct = (entry/sl - 1)*100 if sl else 0
+            tp_pct = (entry/tp - 1)*100 if tp else 0
+        proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
+        back_target = user_state[chat_id].get('pair_detail_back', 'manual_mode')
+        text = (f"📊 {result['symbol']} {result['direction']} {state['trade_mode']}\n\n"
+                f"Balance: {bal}\n"
+                f"Change: {result['change']:+.2f}%" + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "") + "\n"
+                f"Reasons: {' | '.join(result['reasons'])}\n"
+                f"Leverage: {lev}x  |  Margin: {state['margin']}%  (${stake:,.0f})\n"
+                f"Entry: ${entry:,.4f}  |  SL: ${sl:,.4f} ({sl_pct:+.1f}%)  |  TP: ${tp:,.4f} ({tp_pct:+.1f}%)\n"
+                f"RRR: {rrr:.1f}  |  Qty: {qty:.6f}\n"
+                f"Projected TP P&L: ${proj_profit:,.2f} (+{tp_pct:.1f}%)\n"
+                f"Trailing: activates +50%, offset 2%\n"
+                f"Confidence: {conf}% {greens} 🦞")
+        kb = []
+        user_id = update.effective_user.id
+        if is_pair_valid_for_user(result['symbol'], user_id):
+            kb.append([InlineKeyboardButton("🚀 EXECUTE", callback_data="execute")])
+        try:
+            symbol_clean = result['symbol'].replace('/', '')
+            cur_price, _ = get_binance_ticker(symbol_clean)
+            if cur_price and cur_price > 0:
+                kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {result['symbol']} {cur_price:.2f}")])
+        except Exception as e:
+            logger.debug(f"Alert price fetch failed: {e}")
+        kb.append([InlineKeyboardButton("🔄 REFRESH", callback_data=f"refresh_pair_{result['symbol']}")])
+        kb.append([InlineKeyboardButton("⬅️ BACK", callback_data=back_target)])
+        await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
+    except Exception as e:
+        logger.error(f"refresh_pair_detail error: {e}", exc_info=True)
+        await q.edit_message_text(f"❌ Refresh failed: {str(e)[:100]}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
