@@ -1130,13 +1130,13 @@ async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     stake = p.get('stake_amount', 0)
     qty = p.get('quantity', 0)
     lev = state['leverage']
-    # Direction arrow for SL/TP
+    # Direction arrow for SL/TP (P&L percentage at those levels)
     if p['direction'] == 'LONG':
         sl_pct = (sl/entry - 1)*100 if entry else 0
         tp_pct = (tp/entry - 1)*100 if entry else 0
     else:
-        sl_pct = (entry/sl - 1)*100 if sl else 0
-        tp_pct = (entry/tp - 1)*100 if tp else 0
+        sl_pct = (entry - sl) / entry * 100 if entry else 0
+        tp_pct = (entry - tp) / entry * 100 if entry else 0
     # Projected P&L if TP hit
     proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
     text = (f"📊 {p['symbol']} {p['direction']} {state['trade_mode']}\n\n"
@@ -2190,13 +2190,13 @@ async def send_scan_message(chat_id, setups, context):
         tp = p.get('tp', 0)
         rrr = p.get('rrr', 0)
         qty = p.get('quantity', 0)
-        # Calculate percentages for display
+        # Calculate percentages for display (P&L impact at SL/TP)
         if p.get('direction') == 'LONG':
             sl_pct = ((sl - entry) / entry * 100) if entry else 0
             tp_pct = ((tp - entry) / entry * 100) if entry else 0
         else:
-            sl_pct = ((entry - sl) / sl * 100) if sl else 0
-            tp_pct = ((entry - tp) / tp * 100) if tp else 0
+            sl_pct = ((entry - sl) / entry * 100) if entry else 0
+            tp_pct = ((entry - tp) / entry * 100) if entry else 0
         price_str = f" @ ${p['current_price']:,.2f}" if p.get('current_price') else ""
         text += (
             f"{i}. {p['symbol']} {p['direction']} - {p['change']:+.2f}%{price_str}\n"
@@ -2277,13 +2277,13 @@ async def custom_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     stake = result.get('stake_amount', 0)
     qty = result.get('quantity', 0)
     lev = state['leverage']
-    # Direction arrow for SL/TP
+    # Direction arrow for SL/TP (P&L percentage at those levels)
     if result['direction'] == 'LONG':
         sl_pct = (sl/entry - 1)*100 if entry else 0
         tp_pct = (tp/entry - 1)*100 if entry else 0
     else:
-        sl_pct = (entry/sl - 1)*100 if sl else 0
-        tp_pct = (entry/tp - 1)*100 if tp else 0
+        sl_pct = (entry - sl) / entry * 100 if entry else 0
+        tp_pct = (entry - tp) / entry * 100 if entry else 0
     proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
     text = (f"📊 {result['symbol']} {result['direction']} {state['trade_mode']}\n\n"
             f"Balance: {bal}\n"
