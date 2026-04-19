@@ -20,6 +20,8 @@ from pathlib import Path
 import feedparser
 from dotenv import load_dotenv
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, error, BotCommand
+import psutil
+import subprocess
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 
 # ── Trading Trivia Facts ──
@@ -1594,6 +1596,103 @@ async def confirm_exec_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Trade execution failed for {p['symbol']}: {error_msg}")
     await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
 
+# ── Watch Command (Bot Status) ──
+async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """
+    /watch — Show real-time bot status:
+    - Freqtrade (strategy, uptime, open trades)
+    - Telegram Bot (uptime)
+    - Watchdog (uptime)
+    - System info (memory, CPU)
+    """
+    if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
+        return
+    chat_id = update.effective_chat.id
+
+    # Gather process info
+    lines = ["📊 **Bot Status**" "\n"]
+
+    # Helper: find process by command pattern
+    def find_process(pattern):
+        for p in psutil.process_iter(['pid', 'name', 'cmdline', 'create_time']):
+            try:
+                cmd = ' '.join(p.info['cmdline'] or [])
+                if pattern in cmd:
+                    return p
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                continue
+        return None
+
+    # Freqtrade
+    ft = find_process('freqtrade trade')
+    if ft:
+        uptime = int(time.time() - ft.create_time())
+        hours, remainder = divmod(uptime, 3600)
+        mins, secs = divmod(remainder, 60)
+        lines.append(
+            f"✅ **Freqtrade** — PID {ft.pid}\n"
+            f"Uptime: {hours}h {mins}m {secs}s"
+        )
+        # Get strategy from log tail
+        try:
+            log_tail = subprocess.check_output(
+                ['tail', '-20', '/data/.openclaw/workspace/clawforge-repo/logs/freqtrade.log'],
+                text=True, timeout=2
+            )
+            if 'Strategy using' in log_tail:
+                for line in log_tail.split('\n'):
+                    if 'Strategy using' in line and 'Claw5M' in line:
+                        # Extract strategy name
+                        import re
+                        m = re.search(r'Strategy using (\S+)', line)
+                        if m:
+                            lines.append(f"Strategy: {m.group(1)}")
+                            break
+        except Exception:
+            pass
+        # Get open trades count from API
+        try:
+            r = requests.get('http://127.0.0.1:8080/api/v1/trades?status=open', timeout=3)
+            if r.status_code == 200:
+                data = r.json()
+                trades = data.get('trades', [])
+                lines.append(f"Open trades: {len(trades)}/3")
+        except Exception:
+            pass
+    else:
+        lines.append("❌ **Freqtrade** — NOT RUNNING")
+
+    # Telegram Bot
+    bot = find_process('clawforge.telegram_ui')
+    if bot:
+        uptime = int(time.time() - bot.create_time())
+        hours, remainder = divmod(uptime, 3600)
+        mins, secs = divmod(remainder, 60)
+        lines.append(f"✅ **Telegram Bot** — PID {bot.pid}\nUptime: {hours}h {mins}m {secs}s")
+    else:
+        lines.append("❌ **Telegram Bot** — NOT RUNNING")
+
+    # Watchdog
+    watchdog = find_process('watchdog.sh')
+    if watchdog:
+        # Watchdog is a bash script; get its start time
+        uptime = int(time.time() - watchdog.create_time())
+        hours, remainder = divmod(uptime, 3600)
+        mins, secs = divmod(remainder, 60)
+        lines.append(f"✅ **Watchdog** — PID {watchdog.pid}\nUptime: {hours}h {mins}m {secs}s")
+    else:
+        lines.append("⚠️ **Watchdog** — NOT RUNNING (bot not auto-restarting)")
+
+    # System snapshot
+    mem = psutil.virtual_memory()
+    lines.append(f"\n💾 Memory: {mem.used/1e9:.1f}GB / {mem.total/1e9:.1f}GB ({mem.percent}%)")
+
+    await update.message.reply_text(
+        "\n".join(lines),
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]])
+    )
+
 # ── Scan Command ──
 async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Handle /scan command: run AI scan asynchronously and send results."""
@@ -1790,6 +1889,7 @@ async def set_commands(app: Application) -> None:
         BotCommand("start", "Show main menu"),
         BotCommand("cmd", "Show command center"),
         BotCommand("scan", "AI scan of hot pairs"),
+        BotCommand("watch", "Check bot status"),
     ])
 
 # ── Build & Run ──
@@ -1803,6 +1903,7 @@ def main():
         return
     logger.info("Connected to Freqtrade API")
     app = Application.builder().token(TOKEN).post_init(set_commands).build()
+    app.add_handler(CommandHandler("watch", watch_command))
     app.add_handler(CommandHandler(["start", "cmd"], start))
     app.add_handler(CommandHandler("scan", scan_command))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_input_handler))
