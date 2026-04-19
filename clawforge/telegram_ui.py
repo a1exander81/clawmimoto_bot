@@ -1063,7 +1063,9 @@ async def scan_pair_prompt_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.edit_message_text(
         "🔍 **Select Pair to Scan**\n\nChoose a popular pair:",
         parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(kb)
+        reply_markup=InlineKeyboardMarkup(kb + [[
+            InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")
+        ]])
     )
 
 # ── Session Mode ──
