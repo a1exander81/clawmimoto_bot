@@ -1234,8 +1234,8 @@ async def select_pair_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             sl_pct = (sl/entry - 1)*100 if entry else 0
             tp_pct = (tp/entry - 1)*100 if entry else 0
         else:
-            sl_pct = (entry/sl - 1)*100 if sl else 0
-            tp_pct = (entry/tp - 1)*100 if tp else 0
+            sl_pct = (entry - sl) / entry * 100 if entry else 0
+            tp_pct = (entry - tp) / entry * 100 if entry else 0
         # Projected P&L if TP hit
         proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
         text = (f"📊 {result['symbol']} {result['direction']} {state['trade_mode']}\n\n"
@@ -1398,8 +1398,8 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 sl_pct = (sl/entry - 1)*100 if entry else 0
                 tp_pct = (tp/entry - 1)*100 if entry else 0
             else:
-                sl_pct = (entry/sl - 1)*100 if sl else 0
-                tp_pct = (entry/tp - 1)*100 if tp else 0
+                sl_pct = (entry - sl) / entry * 100 if entry else 0
+                tp_pct = (entry - tp) / entry * 100 if entry else 0
             # Projected P&L if TP hit
             proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
             text_msg = (f"📊 {result['symbol']} {result['direction']} {state.get('trade_mode','MOCK')}\n\n"
@@ -1421,6 +1421,8 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         else:
             await update.message.reply_text("❌ Could not extract pair from URL.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
             return
+
+    # Binance futures URL handling
 
     # Binance futures URL handling
     if "binance.com" in text_lower and "/futures/" in text_lower:
@@ -1481,8 +1483,8 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 sl_pct = (sl/entry - 1)*100 if entry else 0
                 tp_pct = (tp/entry - 1)*100 if entry else 0
             else:
-                sl_pct = (entry/sl - 1)*100 if sl else 0
-                tp_pct = (entry/tp - 1)*100 if tp else 0
+                sl_pct = (entry - sl) / entry * 100 if entry else 0
+                tp_pct = (entry - tp) / entry * 100 if entry else 0
             # Projected P&L if TP hit
             proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
             text_msg = (f"📊 {result['symbol']} {result['direction']} {state.get('trade_mode','MOCK')}\n\n"
@@ -2395,8 +2397,8 @@ async def refresh_pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
             sl_pct = (sl/entry - 1)*100 if entry else 0
             tp_pct = (tp/entry - 1)*100 if entry else 0
         else:
-            sl_pct = (entry/sl - 1)*100 if sl else 0
-            tp_pct = (entry/tp - 1)*100 if tp else 0
+            sl_pct = (entry - sl) / entry * 100 if entry else 0
+            tp_pct = (entry - tp) / entry * 100 if entry else 0
         proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
         back_target = user_state[chat_id].get('pair_detail_back', 'manual_mode')
         text = (f"📊 {result['symbol']} {result['direction']} {state['trade_mode']}\n\n"
