@@ -2119,19 +2119,9 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     async def do_scan():
         try:
-            # Start facts cycling task
-            facts_task = asyncio.create_task(cycle_facts_on_message(status_msg, "🔍 **Scanning market..."))
-
             # Run blocking scan in executor to avoid blocking event loop
             loop = asyncio.get_event_loop()
             setups = await loop.run_in_executor(None, ai_scan_pairs)
-
-            # Cancel facts task
-            facts_task.cancel()
-            try:
-                await facts_task
-            except:
-                pass
 
             if not setups:
                 try:
@@ -2163,20 +2153,15 @@ async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
     async def do_refresh():
         try:
-            # Start facts cycling task
-            facts_task = asyncio.create_task(cycle_facts_on_message(query.message, "🔄 **Refreshing scan..."))
-
             # Run blocking scan in executor
             loop = asyncio.get_event_loop()
             setups = await loop.run_in_executor(None, ai_scan_pairs)
 
-            # Cancel facts task
-            facts_task.cancel()
-            try:
-                await facts_task
-            except:
-                pass
-
+            if not setups:
+                try:
+                    await query.edit_message_text("❌ **Scan failed** - No pairs returned.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]]))
+                except: pass
+                return
             user_state[chat_id]["selected_pairs"] = setups
             try:
                 await query.message.delete()
@@ -2186,7 +2171,7 @@ async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TY
             logger.error(f"Refresh scan error: {e}", exc_info=True)
             try:
                 await query.edit_message_text(
-                    f"❌ **Scan failed**: {str(e)[:100]}",
+                    f"❌ **Refresh failed**: {str(e)[:100]}",
                     reply_markup=InlineKeyboardMarkup([
                         [InlineKeyboardButton("🔄 RETRY", callback_data="/scan")],
                         [InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")]
