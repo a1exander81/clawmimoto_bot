@@ -29,11 +29,13 @@
   },
   "entry_pricing": {
     "use_order_book": false,
-    "price_last_balance": 0.0
+    "price_last_balance": 0.0,
+    "price_side": "other"
   },
   "exit_pricing": {
     "use_order_book": false,
-    "price_last_balance": 0.0
+    "price_last_balance": 0.0,
+    "price_side": "other"
   },
   "api_server": {
     "enabled": true,
@@ -45,7 +47,7 @@
   },
   "logfile": "logs/clawforge.log",
   "user_data_dir": "user_data",
-  "strategy": "Claw5MSniper",
+  "strategy": "Claw5MHybrid",
   "strategy_path": "strategies",
   "initial_state": "running"
 }
