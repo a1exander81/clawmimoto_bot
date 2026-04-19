@@ -2342,11 +2342,18 @@ async def set_commands(app: Application) -> None:
     # Send startup notification to admin
     admin_id = os.getenv("ADMIN_TELEGRAM_ID", "7093901111")
     try:
-        await app.bot.send_message(
+        msg = await app.bot.send_message(
             chat_id=admin_id,
             text="✅ *Clawmimoto Bot online*\n\nFreqtrade API connected. All systems go.",
             parse_mode="Markdown"
         )
+        # Auto-delete after 3 seconds
+        async def delete_later():
+            await asyncio.sleep(3)
+            try:
+                await app.bot.delete_message(chat_id=admin_id, message_id=msg.message_id)
+            except: pass
+        asyncio.create_task(delete_later())
     except Exception as e:
         logger.debug(f"Startup notification failed: {e}")
 
