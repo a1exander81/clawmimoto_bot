@@ -1925,7 +1925,10 @@ async def confirm_exec_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             msg += f"**Error:** `{error_msg}`\n\n"
         msg += "Possible reasons:\n• Freqtrade API error\n• Invalid pair/params\n• Exchange down"
         logger.error(f"Trade execution failed for {p['symbol']}: {error_msg}")
-    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
+    await q.edit_message_text(msg, reply_markup=InlineKeyboardMarkup([
+        [InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")],
+        [InlineKeyboardButton("⬅️ MAIN", callback_data="main")]
+    ]))
 
 # ── Watch Command (Bot Status) ──
 async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
