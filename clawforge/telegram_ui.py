@@ -1836,10 +1836,13 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uptime = int(time.time() - ft.create_time())
         hours, remainder = divmod(uptime, 3600)
         mins, secs = divmod(remainder, 60)
-        lines.append(
+        status_line = (
             f"✅ **Freqtrade** — PID {ft.pid}\n"
             f"Uptime: {hours}h {mins}m {secs}s"
         )
+        if uptime < 60:
+            status_line += " 🔄 (just restarted)"
+        lines.append(status_line)
         # Get strategy from log tail
         try:
             log_tail = subprocess.check_output(
@@ -1849,7 +1852,6 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if 'Strategy using' in log_tail:
                 for line in log_tail.split('\n'):
                     if 'Strategy using' in line and 'Claw5M' in line:
-                        # Extract strategy name
                         import re
                         m = re.search(r'Strategy using (\S+)', line)
                         if m:
@@ -1867,7 +1869,34 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         except Exception:
             pass
     else:
-        lines.append("❌ **Freqtrade** — NOT RUNNING")
+        # Freqtrade down — check watchdog
+        wd = find_process('watchdog.sh')
+        if wd:
+            # Check recent restart attempt from watchdog.log
+            try:
+                with open('/data/.openclaw/workspace/clawmimoto-bot/watchdog.log', 'r') as f:
+                    log_lines = f.readlines()
+                # Find last "Freqtrade down — restarting..."
+                last_ts = None
+                for line in reversed(log_lines):
+                    if 'freqtrade down' in line.lower() and 'restarting' in line.lower():
+                        # Timestamp is at start: "Sun Apr 19 09:42:45 +08 2026"
+                        ts_str = line[:30].strip()
+                        try:
+                            dt = datetime.strptime(ts_str, "%a %b %d %H:%M:%S %z %Y")
+                            last_ts = dt
+                            break
+                        except:
+                            continue
+                if last_ts and (time.time() - last_ts.timestamp()) < 120:
+                    lines.append("❌ **Freqtrade** — DOWN (watchdog restarting...)")
+                    lines.append(f"   Last restart attempt: {last_ts.strftime('%H:%M:%S')}")
+                else:
+                    lines.append("❌ **Freqtrade** — DOWN (watchdog monitoring)")
+            except Exception:
+                lines.append("❌ **Freqtrade** — DOWN")
+        else:
+            lines.append("❌ **Freqtrade** — DOWN (no watchdog)")
 
     # Telegram Bot
     bot = find_process('clawforge.telegram_ui')
@@ -1875,9 +1904,38 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uptime = int(time.time() - bot.create_time())
         hours, remainder = divmod(uptime, 3600)
         mins, secs = divmod(remainder, 60)
-        lines.append(f"✅ **Telegram Bot** — PID {bot.pid}\nUptime: {hours}h {mins}m {secs}s")
+        status_line = (
+            f"✅ **Telegram Bot** — PID {bot.pid}\n"
+            f"Uptime: {hours}h {mins}m {secs}s"
+        )
+        if uptime < 60:
+            status_line += " 🔄 (just restarted)"
+        lines.append(status_line)
     else:
-        lines.append("❌ **Telegram Bot** — NOT RUNNING")
+        wd = find_process('watchdog.sh')
+        if wd:
+            try:
+                with open('/data/.openclaw/workspace/clawmimoto-bot/watchdog.log', 'r') as f:
+                    log_lines = f.readlines()
+                last_ts = None
+                for line in reversed(log_lines):
+                    if 'telegram bot down' in line.lower() and 'restarting' in line.lower():
+                        ts_str = line[:30].strip()
+                        try:
+                            dt = datetime.strptime(ts_str, "%a %b %d %H:%M:%S %z %Y")
+                            last_ts = dt
+                            break
+                        except:
+                            continue
+                if last_ts and (time.time() - last_ts.timestamp()) < 120:
+                    lines.append("❌ **Telegram Bot** — DOWN (watchdog restarting...)")
+                    lines.append(f"   Last restart attempt: {last_ts.strftime('%H:%M:%S')}")
+                else:
+                    lines.append("❌ **Telegram Bot** — DOWN (watchdog monitoring)")
+            except Exception:
+                lines.append("❌ **Telegram Bot** — DOWN")
+        else:
+            lines.append("❌ **Telegram Bot** — DOWN (no watchdog)")
 
     # Watchdog
     watchdog = find_process('watchdog.sh')
