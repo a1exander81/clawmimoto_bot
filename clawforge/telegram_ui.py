@@ -2121,7 +2121,7 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             # Run blocking scan in executor to avoid blocking event loop
             loop = asyncio.get_event_loop()
-            setups = await loop.run_in_executor(None, ai_scan_pairs)
+            setups = await loop.run_in_executor(None, ai_scan_pairs, None, chat_id)
 
             if not setups:
                 try:
@@ -2155,7 +2155,7 @@ async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TY
         try:
             # Run blocking scan in executor
             loop = asyncio.get_event_loop()
-            setups = await loop.run_in_executor(None, ai_scan_pairs)
+            setups = await loop.run_in_executor(None, ai_scan_pairs, None, chat_id)
 
             if not setups:
                 try:
@@ -2250,13 +2250,14 @@ async def custom_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Run AI analysis
     result = analyze_pair(pair)
     chat_id = q.message.chat_id
+    # Enrich with user-specific trade params (quantity, stake, etc.)
+    result = enrich_trade_params(result, chat_id)
     user_state[chat_id]["selected_pairs"] = [result]
 
     # Build detail view (same as pair_detail_cb)
     state = get_state(chat_id)
     real, mock = get_balance()
     bal = format_balance(real, mock, state["trade_mode"])
-    margin_val = (10000 if state["trade_mode"] == "MOCK" else (real or 10000)) * (state["margin"] / 100)
     conf = result["confidence"]
     greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
     # Get real-time price for alert (prefer fresh ticker, fallback to kline price)
@@ -2268,12 +2269,31 @@ async def custom_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             cur_price = ticker_price
     except Exception as e:
         logger.debug(f"Ticker fetch failed: {e}")
+    # Enriched trade params (already enriched above)
+    entry = result.get('entry', cur_price or 0)
+    sl = result.get('sl', 0)
+    tp = result.get('tp', 0)
+    rrr = result.get('rrr', 2.0)
+    stake = result.get('stake_amount', 0)
+    qty = result.get('quantity', 0)
+    lev = state['leverage']
+    # Direction arrow for SL/TP
+    if result['direction'] == 'LONG':
+        sl_pct = (sl/entry - 1)*100 if entry else 0
+        tp_pct = (tp/entry - 1)*100 if entry else 0
+    else:
+        sl_pct = (entry/sl - 1)*100 if sl else 0
+        tp_pct = (entry/tp - 1)*100 if tp else 0
+    proj_profit = stake * lev * abs(tp - entry) / entry if entry else 0
     text = (f"📊 {result['symbol']} {result['direction']} {state['trade_mode']}\n\n"
             f"Balance: {bal}\n"
             f"Change: {result['change']:+.2f}%" + (f"  |  Current: ${cur_price:,.2f}" if cur_price else "") + "\n"
             f"Reasons: {' | '.join(result['reasons'])}\n"
-            f"Leverage: {state['leverage']}x  |  Margin: {state['margin']}%  (${margin_val:,.0f})\n"
-            f"Entry: market  |  SL: TBD  |  TP: TBD  |  RRR: {result.get('rrr',2.0):.1f}\n"
+            f"Leverage: {lev}x  |  Margin: {state['margin']}%  (${stake:,.0f})\n"
+            f"Entry: ${entry:,.4f}  |  SL: ${sl:,.4f} ({sl_pct:+.1f}%)  |  TP: ${tp:,.4f} ({tp_pct:+.1f}%)\n"
+            f"RRR: {rrr:.1f}  |  Qty: {qty:.6f}\n"
+            f"Projected TP P&L: ${proj_profit:,.2f} (+{tp_pct:.1f}%)\n"
+            f"Trailing: activates +50%, offset 2%\n"
             f"Confidence: {conf}% {greens} 🦞")
     kb = []
     # Only show EXECUTE if pair is valid on exchange (admins bypass)
@@ -2283,6 +2303,7 @@ async def custom_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Add SET ALERT button with current price
     if cur_price and cur_price > 0:
         kb.append([InlineKeyboardButton("🔔 SET ALERT", callback_data=f"/alert {result['symbol']} {cur_price:.2f}")])
+    kb.append([InlineKeyboardButton("🔄 REFRESH", callback_data=f"refresh_pair_{result['symbol']}")])
     kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")])
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
