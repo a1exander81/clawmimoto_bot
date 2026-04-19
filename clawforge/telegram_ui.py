@@ -1554,6 +1554,7 @@ def validate_pair_on_bingx(pair):
 def extract_pair_from_bingx_url(url):
     """Extract pair from BingX perpetual URL.
     Example: https://bingx.com/en/perpetual/GENIUS-USDT -> GENIUS/USDT
+    Returns None if pair is not USDT-margined.
     """
     try:
         from urllib.parse import urlparse
@@ -1564,12 +1565,14 @@ def extract_pair_from_bingx_url(url):
             if part.lower() == 'perpetual' and i + 1 < len(path_parts):
                 pair_raw = path_parts[i + 1]
                 pair = pair_raw.replace('-', '/').upper()
-                return pair
+                # Enforce USDT-margined only
+                if pair.endswith('/USDT'):
+                    return pair
         # Fallback: last path segment
         if path_parts:
             pair_raw = path_parts[-1]
             pair = pair_raw.replace('-', '/').upper()
-            if '/' in pair:
+            if '/' in pair and pair.endswith('/USDT'):
                 return pair
     except Exception as e:
         logger.debug(f"URL parse error: {e}")
