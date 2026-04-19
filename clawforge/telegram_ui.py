@@ -582,29 +582,30 @@ def format_gains():
     return f"{pnl_pct:+.1f}% ${pnl:,.2f}"
 
 # ── AI Scan ──
-def call_stepfun_skill(prompt, retries=1):
-    """Call StepFun API with timeout and simple retry."""
+def call_stepfun_skill(prompt, retries=2):
+    """Call StepFun API with timeout and retry. Returns AI text or None."""
     if not STEPFUN_API_KEY:
         return None
     headers = {"Authorization": f"Bearer {STEPFUN_API_KEY}", "Content-Type": "application/json"}
     payload = {
         "model": "step-3.5-flash",
         "messages": [
-            {"role": "system", "content": "You are an expert crypto scalping analyst. Provide concise TA with confidence % (80-90) and RRR."},
+            {"role": "system", "content": "You are an expert crypto scalping analyst. Provide concise TA with confidence %% (80-90) and RRR."},
             {"role": "user", "content": prompt}
         ],
         "temperature": 0.7
     }
     for attempt in range(retries + 1):
         try:
-            r = requests.post("https://api.stepfun.ai/v1/chat/completions", json=payload, headers=headers, timeout=15)
+            logger.debug(f"StepFun call attempt {attempt+1}/{retries+1} for: {prompt[:60]}...")
+            r = requests.post("https://api.stepfun.ai/v1/chat/completions", json=payload, headers=headers, timeout=30)
             if r.status_code == 200:
                 return r.json()["choices"][0]["message"]["content"]
             logger.warning(f"StepFun HTTP {r.status_code}: {r.text[:100]}")
         except Exception as e:
             logger.error(f"StepFun error (attempt {attempt+1}): {e}")
         if attempt < retries:
-            time.sleep(1)
+            time.sleep(2 ** attempt)  # exponential backoff: 1s, 2s
     return None
 
 def ai_scan_pairs(custom_pairs=None, chat_id=None):
@@ -612,8 +613,10 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None):
     Scans up to 4 pairs to keep response time reasonable.
     """
     pairs_to_scan = custom_pairs if custom_pairs else get_bingx_hot_pairs(limit=4)
+    logger.info(f"ai_scan_pairs: scanning {len(pairs_to_scan)} pairs: {pairs_to_scan}")
     results = []
     for pair in pairs_to_scan:
+        logger.info(f"Scanning pair: {pair}")
         # Ensure format
         if "/" not in pair:
             pair = f"{pair}/USDT"
@@ -630,9 +633,11 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None):
             current_price = closes[-1] if closes else 0
         if current_price <= 0:
             current_price, _ = get_binance_ticker(symbol)
+        logger.info(f"Pair {pair}: change={change:.2f}%, price={current_price}")
         # AI reasoning
         prompt = f"Scalp analysis for {pair} 5M: change {change:.2f}%, volume {volume:.0f}. Give: direction (LONG/SHORT), confidence 80-90%, RRR 1.5-3.0, 3 reasons."
         ai_text = call_stepfun_skill(prompt)
+        logger.info(f"StepFun response for {pair}: {ai_text[:80] if ai_text else 'None'}")
         direction = "LONG" if change >= 0 else "SHORT"
         confidence = 85 if change >= 0 else 75
         reasons = ["High volume", "Momentum", "AI signal"]
@@ -654,6 +659,7 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None):
             "reasons": reasons,
             "current_price": current_price,
         }
+        logger.info(f"Result for {pair}: dir={direction}, conf={confidence}, reasons={reasons}")
         # Enrich with trade params if chat_id provided
         if chat_id:
             result = enrich_trade_params(result, chat_id)
@@ -672,9 +678,12 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None):
                 "rrr": round(target_pct/risk_pct, 2),
             })
         results.append(result)
+        logger.info(f"Completed {pair}, total results: {len(results)}/{len(pairs_to_scan)}")
     # Sort by confidence desc, take top 4
     results.sort(key=lambda x: x["confidence"], reverse=True)
-    return results[:4]
+    top4 = results[:4]
+    logger.info(f"ai_scan_pairs complete: returning {len(top4)} results")
+    return top4
 
 # ── UI Builders ──
 def mode_button(mode):
