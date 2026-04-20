@@ -17,12 +17,12 @@
         "defaultType": "swap"
       }
     },
-    "ccxt_async_config": {},
-    "pair_whitelist": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+    "ccxt_async_config": {}
   },
   "trading_mode": "futures",
   "leverage": 50,
   "margin_mode": "isolated",
+  "pair_whitelist": ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"],
   "pairlists": [
     {
       "method": "StaticPairList"
