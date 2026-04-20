@@ -26,10 +26,16 @@ class Claw5MHybrid(IStrategy):
     max_open_trades = 3
     stoploss = -0.004
     trailing_stop = True
-    trailing_stop_positive = 0.50
-    trailing_stop_positive_offset = 0.50
+    trailing_stop_positive = 0.15
+    trailing_stop_positive_offset = 0.20
     trailing_only_offset_is_reached = True
-    minimal_roi = {"0": 0.10}
+    minimal_roi = {
+        "0": 0.20,
+        "15": 0.15,
+        "30": 0.10,
+        "60": 0.05,
+        "120": 0.02,
+    }
 
     # Use custom leverage() method
     use_custom_leverage = True
@@ -284,13 +290,17 @@ class Claw5MHybrid(IStrategy):
         ai_norm = max(0.0, min(1.0, (ai_confidence - 80) / 10))
         combined_confidence = (ai_norm * 0.4) + (trend_strength * 0.6)
 
-        # ── PROFIT PROTECTION (highest priority) ──
-        if current_profit >= 1.00:
-            return -(0.10 / leverage)  # lock at 10% margin risk
+        # ── STAGE 1: CAPITAL RECOVERY (highest priority) ──
+        # At 10% profit → move SL to near breakeven
+        # Capital is now safe, remainder rides free
+        if current_profit >= 0.10:
+            return -(0.01 / leverage)  # breakeven lock
+
+        # ── STAGE 2: PROFIT PROTECTION ──
         if current_profit >= 0.50:
-            return -(0.15 / leverage)  # lock at 15% margin risk
+            return -(0.10 / leverage)  # lock 10% margin
         if current_profit >= 0.20:
-            return -(0.01 / leverage)  # near breakeven
+            return -(0.05 / leverage)  # lock 5% margin
 
         # ── SESSION-BASED MARGIN SL ──
         sgt_hour = (current_time.hour + 8) % 24
@@ -319,21 +329,90 @@ class Claw5MHybrid(IStrategy):
 
         return -price_sl
 
+    def confirm_trade_entry(self, pair: str, order_type, amount: float,
+                           rate: float, time_in_force: str, current_time: datetime,
+                           entry_tag: Optional[str], side: str, **kwargs) -> bool:
+        """
+        Circuit breaker:
+        - Stop trading if daily PnL hits +150% (target reached)
+        - Stop trading if daily PnL hits -30% (protect capital)
+        - Max 7 total trades per day (3 session + 4 manual)
+        """
+        try:
+            from freqtrade.persistence import Trade
+            import logging as _logging
+            _logging.basicConfig(level=_logging.INFO)
+            logger = _logging.getLogger(__name__)
+
+            today = current_time.date()
+
+            # Get today's closed trades
+            all_trades = Trade.get_trades_proxy(is_open=False)
+            daily_trades = [
+                t for t in all_trades
+                if t.close_date and t.close_date.date() == today
+            ]
+
+            # Count open trades (all currently open)
+            open_trades = Trade.get_trades_proxy(is_open=True)
+
+            # Daily PnL check (sum of profit ratios as percentages)
+            daily_pnl = sum(t.profit_ratio * 100 for t in daily_trades)
+
+            if daily_pnl >= 150:
+                self.log_once(
+                    f"🎯 Daily target reached: +{daily_pnl:.1f}% — stopping trading",
+                    _logging.INFO
+                )
+                return False
+
+            if daily_pnl <= -30:
+                self.log_once(
+                    f"🛑 Daily loss limit hit: {daily_pnl:.1f}% — stopping trading",
+                    _logging.WARNING
+                )
+                return False
+
+            # Max trades check (7 total)
+            if len(open_trades) >= 7:
+                return False
+
+        except Exception as e:
+            pass  # Never block trades due to circuit breaker error
+
+        return True
+
     def custom_exit(self, pair: str, trade: 'Trade', current_time: datetime,
                     current_rate: float, current_profit: float, **kwargs) -> Optional[str]:
-        hold_time = current_time - trade.open_date
-        if hold_time < timedelta(minutes=self.min_hold_minutes):
-            return None
-        dataframe = self.dp.get_pair_dataframe(pair, self.timeframe)
-        if dataframe is None or len(dataframe) < 1:
-            return None
-        latest = dataframe.iloc[-1]
-        exit_long = (latest.get('ema8', 0) < latest.get('ema20', 0)) or (latest.get('ha_close', 0) < latest.get('ema8', 0))
-        if exit_long and not trade.is_short:
-            return "TA exit: EMA/HA reversal"
-        exit_short = (latest.get('ema8', 0) > latest.get('ema20', 0)) or (latest.get('ha_close', 0) > latest.get('ema8', 0))
-        if exit_short and trade.is_short:
-            return "TA exit: EMA/HA reversal"
+        """
+        Session-aware TP exits:
+        - Tokyo (0–9 SGT): exit at 8% profit
+        - London (16–20 SGT): exit at 15% profit
+        - NY (21–23 SGT): exit at 20% profit
+        - Off session: exit at 5% profit
+        """
+        sgt_hour = (current_time.hour + 8) % 24
+
+        # Tokyo — ranging market, take profit fast
+        if 0 <= sgt_hour < 9:
+            if current_profit >= 0.08:
+                return 'tokyo_tp'
+
+        # London — trending, let it run more
+        elif 16 <= sgt_hour < 20:
+            if current_profit >= 0.15:
+                return 'london_tp'
+
+        # NY — strongest trends, widest TP
+        elif 21 <= sgt_hour <= 23:
+            if current_profit >= 0.20:
+                return 'ny_tp'
+
+        # Off session — take anything above 5%
+        else:
+            if current_profit >= 0.05:
+                return 'offsession_tp'
+
         return None
 
     @staticmethod
