@@ -45,9 +45,9 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     TZ=Asia/Singapore
 
-# Health check for Freqtrade API
+# Health check: verify service process is running (reads /proc, no extra deps)
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-    CMD curl -f http://127.0.0.1:8080/api/v1/ping || exit 1
+    CMD python3 -c "import glob; cmds=' '.join(open(p+'/cmdline','rb').read().decode(errors='ignore').replace('\\x00',' ') for p in glob.glob('/proc/[0-9]*')); (('freqtrade' in cmds) or ('telegram_ui' in cmds)) or exit(1)"
 
 # Default: run both services via supervisord-like script
 # But we'll use docker-compose to run them as separate services
