@@ -24,7 +24,7 @@ def get_sentiment_score(pair: str, context: str = "") -> float:
             "max_tokens": 10,
             "temperature": 0.1
         }
-        r = requests.post(STEPFUN_URL, json=payload, headers=headers, timeout=15)
+        r = requests.post(STEPFUN_URL, json=payload, headers=headers, timeout=30)
         r.raise_for_status()
         text = r.json()["choices"][0]["message"]["content"].strip()
         return max(0.0, min(1.0, float(text)))

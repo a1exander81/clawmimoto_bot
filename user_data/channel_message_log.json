@@ -10,5 +10,79 @@
     "timestamp": "2026-04-21T08:00:05.449486Z",
     "chat_id": "7093901111",
     "type": "ta_update"
+  },
+  {
+    "message_id": 1353,
+    "timestamp": "2026-04-21T12:00:05.527078Z",
+    "chat_id": "7093901111",
+    "type": "ta_update"
+  },
+  {
+    "message_id": 1366,
+    "timestamp": "2026-04-21T16:00:05.904336Z",
+    "chat_id": "7093901111",
+    "type": "ta_update"
+  },
+  {
+    "message_id": 1406,
+    "timestamp": "2026-04-21T18:00:05.660188Z",
+    "chat_id": "7093901111",
+    "type": "ta_update"
+  },
+  {
+    "message_id": 1422,
+    "timestamp": "2026-04-21T23:20:27.464165Z",
+    "chat_id": "7093901111",
+    "type": "ta_update",
+    "delete_at": "2026-04-21T23:50:27.464141Z"
+  },
+  {
+    "message_id": 70,
+    "timestamp": "2026-04-21T23:20:28.028568Z",
+    "chat_id": "@RightclawTrade",
+    "type": "ta_update",
+    "delete_at": "2026-04-21T23:50:28.028542Z"
+  },
+  {
+    "message_id": 1423,
+    "timestamp": "2026-04-21T23:24:52.958210Z",
+    "chat_id": "7093901111",
+    "type": "ta_update",
+    "delete_at": "2026-04-21T23:54:52.958185Z"
+  },
+  {
+    "message_id": 71,
+    "timestamp": "2026-04-21T23:24:53.553387Z",
+    "chat_id": "@RightclawTrade",
+    "type": "ta_update",
+    "delete_at": "2026-04-21T23:54:53.553367Z"
+  },
+  {
+    "message_id": 1424,
+    "timestamp": "2026-04-21T23:32:01.166393Z",
+    "chat_id": "7093901111",
+    "type": "ta_update",
+    "delete_at": "2026-04-22T00:02:01.166371Z"
+  },
+  {
+    "message_id": 72,
+    "timestamp": "2026-04-21T23:32:01.779487Z",
+    "chat_id": "@RightclawTrade",
+    "type": "ta_update",
+    "delete_at": "2026-04-22T00:02:01.779462Z"
+  },
+  {
+    "message_id": 1425,
+    "timestamp": "2026-04-21T23:32:02.330807Z",
+    "chat_id": "7093901111",
+    "type": "headline_preview",
+    "delete_at": "2026-04-22T00:02:02.330784Z"
+  },
+  {
+    "message_id": 73,
+    "timestamp": "2026-04-21T23:32:02.892474Z",
+    "chat_id": "@RightclawTrade",
+    "type": "headline_preview",
+    "delete_at": "2026-04-22T00:02:02.892451Z"
   }
 ]
