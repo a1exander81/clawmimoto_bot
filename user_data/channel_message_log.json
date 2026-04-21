@@ -28,5 +28,19 @@
     "timestamp": "2026-04-21T18:00:05.660188Z",
     "chat_id": "7093901111",
     "type": "ta_update"
+  },
+  {
+    "message_id": 1422,
+    "timestamp": "2026-04-21T23:20:27.464165Z",
+    "chat_id": "7093901111",
+    "type": "ta_update",
+    "delete_at": "2026-04-21T23:50:27.464141Z"
+  },
+  {
+    "message_id": 70,
+    "timestamp": "2026-04-21T23:20:28.028568Z",
+    "chat_id": "@RightclawTrade",
+    "type": "ta_update",
+    "delete_at": "2026-04-21T23:50:28.028542Z"
   }
 ]

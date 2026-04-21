@@ -74,7 +74,8 @@ def fetch_cryptopanic_news() -> list[dict]:
                     continue
                 source = item.get("source", {}).get("title", "CryptoPanic")
                 published = item.get("published_at", "")
-                results.append({"title": title, "source": source, "published": published})
+                url = item.get("url", "")
+                results.append({"title": title, "source": source, "published": published, "url": url})
             return results
     except Exception as e:
         logger.debug(f"CryptoPanic fetch error: {e}")
@@ -82,7 +83,7 @@ def fetch_cryptopanic_news() -> list[dict]:
 
 
 def parse_rss_feed(url: str, source_name: str) -> list[dict]:
-    """Generic RSS parser. Returns list of {title, source, published}."""
+    """Generic RSS parser. Returns list of {title, source, published, url}."""
     try:
         feed = feedparser.parse(url)
         entries = []
@@ -93,7 +94,8 @@ def parse_rss_feed(url: str, source_name: str) -> list[dict]:
                 continue
             source = source_name
             published = entry.get("published", "")
-            entries.append({"title": title, "source": source, "published": published})
+            link = entry.get("link", "")
+            entries.append({"title": title, "source": source, "published": published, "url": link})
         return entries
     except Exception as e:
         logger.debug(f"RSS fetch error {source_name}: {e}")
@@ -139,7 +141,8 @@ def format_time_ago(published_str: str) -> str:
         days = hours // 24
         return f"{days}d ago"
     except Exception:
-        return "recently"
+        # Fallback: assume ~1 hour ago
+        return "1h ago"
 
 
 # ── Binance Kline Fetchers ──
@@ -291,7 +294,11 @@ def main():
     if news_items:
         for item in news_items:
             time_ago = format_time_ago(item["published"])
-            lines.append(f"• {item['title']} — {item['source']} ({time_ago})")
+            url = item.get("url", "")
+            if url:
+                lines.append(f"• [{item['title']}]({url}) — {item['source']} ({time_ago})")
+            else:
+                lines.append(f"• {item['title']} — {item['source']} ({time_ago})")
     else:
         lines.append("• No major crypto news in the last 4 hours.")
 
