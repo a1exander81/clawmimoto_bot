@@ -18,7 +18,7 @@ import threading
 import json
 import re
 import concurrent.futures
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 import feedparser
 from dotenv import load_dotenv
@@ -425,33 +425,60 @@ def analyze_pair(pair):
 
 # ── Trade Parameter Enrichment ──
 def enrich_trade_params(pair_result, chat_id):
-    """Add concrete trade parameters (entry, sl, tp, rrr, sizing) based on user state and balance."""
+    """Add concrete trade parameters (entry, sl, tp, rrr, sizing) based on user state, balance, and session-aware risk levels."""
     state = get_state(chat_id)
     real, mock = get_balance()
     mode = state.get("trade_mode", "MOCK")
     wallet = mock if mode == "MOCK" else (real or 0)
-    leverage = state.get("leverage", 50)
+    leverage = state.get("leverage", 28) or 28  # default 28 if not set
     margin_pct = state.get("margin", 1.0)
     direction = pair_result.get("direction", "LONG")
     current_price = pair_result.get("current_price", 0)
     if current_price <= 0:
         return pair_result
-    # Strategy defaults: initial SL 25%, first TP 50% (RRR = 2.0)
-    risk_pct = 0.25
-    target_pct = 0.50
+
+    # Detect active session from current SGT time (UTC+8)
+    now_utc = datetime.now(timezone.utc)
+    now_sgt = (now_utc + timedelta(hours=8)).time()
+    hour_sgt = now_sgt.hour
+    # Session windows (SGT): pre_london 06:00-07:00, london 16:00-20:00, ny 21:00-23:00
+    if 6 <= hour_sgt < 7:
+        session = "pre_london"
+        base_sl_pct = 0.015   # 1.5%
+        base_tp_pct = 0.045   # 4.5% → 3:1 RRR
+    elif 16 <= hour_sgt < 20:
+        session = "london"
+        base_sl_pct = 0.015
+        base_tp_pct = 0.045
+    elif 21 <= hour_sgt < 23:
+        session = "ny"
+        base_sl_pct = 0.020   # 2.0%
+        base_tp_pct = 0.060   # 6.0% → 3:1 RRR
+    else:
+        session = "manual"
+        base_sl_pct = 0.010   # 1.0%
+        base_tp_pct = 0.020   # 2.0% → 2:1 RRR
+
+    # Apply leverage scaling as per spec: distance = base_pct / leverage
+    sl_distance = base_sl_pct / leverage
+    tp_distance = base_tp_pct / leverage
+
+    # Compute entry, SL, TP
+    entry = current_price
     if direction == "LONG":
-        entry = current_price
-        sl = current_price * (1 - risk_pct)
-        tp = current_price * (1 + target_pct)
+        sl = entry * (1 - sl_distance)
+        tp = entry * (1 + tp_distance)
     else:  # SHORT
-        entry = current_price
-        sl = current_price * (1 + risk_pct)
-        tp = current_price * (1 - target_pct)
-    rrr = target_pct / risk_pct
+        sl = entry * (1 + sl_distance)
+        tp = entry * (1 - tp_distance)
+
+    rrr = tp_distance / sl_distance if sl_distance > 0 else 0
+
     # Position sizing (using stake_amount = wallet * margin_pct/100)
     stake_amount = wallet * (margin_pct / 100)
     position_value = stake_amount * leverage
     quantity = position_value / entry
+
     pair_result.update({
         "entry": round(entry, 4),
         "sl": round(sl, 4),
@@ -462,6 +489,7 @@ def enrich_trade_params(pair_result, chat_id):
         "quantity": round(quantity, 6),
         "margin_pct": margin_pct,
         "leverage": leverage,
+        "session": session,
     })
     return pair_result
 
