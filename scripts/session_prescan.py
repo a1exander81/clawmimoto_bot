@@ -12,10 +12,6 @@ import requests
 from datetime import datetime, timezone, timedelta
 from pathlib import Path
 
-# Add parent dir to path to import clawforge modules
-sys.path.insert(0, str(Path(__file__).parent.parent / "clawforge"))
-from telegram_ui import bybit_signed_request
-
 # ── Config ──
 SESSIONS = {
     "pre_london": {
@@ -50,8 +46,8 @@ SESSIONS = {
     },
 }
 
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-RIGHTCLAW_CHANNEL = os.getenv("RIGHTCLAW_CHANNEL", "@RightclawTrade")
 
 logging.basicConfig(
     level=logging.INFO,
@@ -59,6 +55,41 @@ logging.basicConfig(
     handlers=[logging.StreamHandler(sys.stdout)]
 )
 logger = logging.getLogger(__name__)
+
+# ── Self-contained Bybit API client ──
+def bybit_request(endpoint: str, params: dict = None):
+    """GET request to Bybit v5 API."""
+    url = f"https://api.bybit.com{endpoint}"
+    try:
+        r = requests.get(url, params=params, timeout=10)
+        if r.status_code != 200:
+            logger.error(f"Bybit HTTP {r.status_code}: {r.text[:100]}")
+            return None
+        return r.json()
+    except Exception as e:
+        logger.error(f"Bybit API error: {e} | Status: {getattr(r, 'status_code', 'N/A')} | Body: {getattr(r, 'text', '')[:100]}")
+        return None
+
+# ── Self-contained Telegram sender ──
+def send_telegram(text: str, reply_markup: dict = None):
+    """Send message via Telegram Bot API."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        logger.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID not set")
+        return None
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown"
+    }
+    if reply_markup:
+        payload["reply_markup"] = json.dumps(reply_markup)
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        return r.json()
+    except Exception as e:
+        logger.error(f"Telegram error: {e}")
+        return None
 
 
 def sgt_now():
@@ -78,13 +109,13 @@ def to_sgt(dt: datetime) -> datetime:
     return dt.astimezone(timezone(timedelta(hours=8)))
 
 
-def fetch_klines(symbol: str, interval: str, limit: int = 50):
+def fetch_klines(pair: str, interval: str, limit: int = 50):
     """Fetch klines from Bybit."""
-    bybit_sym = symbol.replace("/", "").upper()
-    data = bybit_signed_request(
-        "GET", "/v5/market/kline",
-        params={"category": "linear", "symbol": bybit_sym, "interval": interval, "limit": limit},
-        timeout=10
+    # Convert pair format: BTC/USDT → BTCUSDT
+    bybit_symbol = pair.replace("/", "").replace(":USDT", "")
+    data = bybit_request(
+        "/v5/market/kline",
+        params={"category": "linear", "symbol": bybit_symbol, "interval": interval, "limit": limit}
     )
     if data and data.get("retCode") == 0:
         return data.get("result", {}).get("list", [])
@@ -187,7 +218,7 @@ def analyze_pair_for_session(pair: str, session_cfg: dict):
 
 
 def send_prescan_alert(session_key: str, results: list):
-    """Send pre-session alert to Telegram channel with APPROVE/SKIP buttons."""
+    """Send pre-session alert to Telegram chat with APPROVE/SKIP buttons."""
     if not TELEGRAM_CHAT_ID:
         logger.error("TELEGRAM_CHAT_ID not set")
         return
@@ -217,38 +248,17 @@ def send_prescan_alert(session_key: str, results: list):
     text = "\n".join(lines)
 
     # Build inline keyboard
-    keyboard = [
-        [
-            InlineKeyboardButton("✅ APPROVE ALL", callback_data=f"session_approve_{session_key}"),
-            InlineKeyboardButton("❌ SKIP SESSION", callback_data=f"session_skip_{session_key}")
+    reply_markup = {
+        "inline_keyboard": [
+            [
+                {"text": "✅ APPROVE ALL", "callback_data": f"session_approve_{session_key}"},
+                {"text": "❌ SKIP SESSION", "callback_data": f"session_skip_{session_key}"}
+            ]
         ]
-    ]
-
-    # Send via bot (need to import Application)
-    # Since this is a standalone script, use requests to bot API directly
-    token = os.getenv("TELEGRAM_BOT_TOKEN")
-    if not token:
-        logger.error("TELEGRAM_BOT_TOKEN not set")
-        return
-
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
-    payload = {
-        "chat_id": TELEGRAM_CHAT_ID,
-        "text": text,
-        "parse_mode": "Markdown",
-        "reply_markup": json.dumps({"inline_keyboard": [[
-            {"text": "✅ APPROVE ALL", "callback_data": f"session_approve_{session_key}"},
-            {"text": "❌ SKIP SESSION", "callback_data": f"session_skip_{session_key}"}
-        ]]})
     }
-    try:
-        r = requests.post(url, json=payload, timeout=10)
-        if r.status_code == 200:
-            logger.info(f"Prescan alert sent for {session_cfg['name']}")
-        else:
-            logger.error(f"Telegram send failed: {r.status_code} {r.text[:200]}")
-    except Exception as e:
-        logger.error(f"Telegram error: {e}")
+
+    send_telegram(text, reply_markup=reply_markup)
+    logger.info(f"Prescan alert sent for {session_cfg['name']}")
 
 
 def run_prescan(session_key: str):

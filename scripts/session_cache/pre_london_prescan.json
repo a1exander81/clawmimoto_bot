@@ -1,0 +1,30 @@
+{
+  "session": "pre_london",
+  "timestamp": "2026-04-21T15:59:33.581979+00:00",
+  "results": [
+    {
+      "symbol": "ETH/USDT",
+      "direction": "SHORT",
+      "entry": 2414.56,
+      "sl": 2421.8037,
+      "tp": 2396.4508,
+      "rrr": 2.5,
+      "atr_pct": 2.84,
+      "current_price": 2186.14,
+      "margin_pct": 1.5,
+      "session": "PRE-LONDON"
+    },
+    {
+      "symbol": "SOL/USDT",
+      "direction": "SHORT",
+      "entry": 87.62,
+      "sl": 87.8829,
+      "tp": 86.9629,
+      "rrr": 2.5,
+      "atr_pct": 2.3,
+      "current_price": 81.81,
+      "margin_pct": 1.5,
+      "session": "PRE-LONDON"
+    }
+  ]
+}
