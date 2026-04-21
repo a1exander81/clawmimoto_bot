@@ -81,16 +81,15 @@ class Claw5MHybrid(IStrategy):
         super().init(config)
         self.custom_info = {}
 
-    def leverage(self, pair, current_time, current_rate,
-                 proposed_leverage, side, **kwargs):
-        """
-        Dynamic leverage based on dual confidence systems:
+    def leverage(self, pair: str, current_time: datetime, current_rate: float,
+                 proposed_leverage: float, max_leverage: float, entry_tag: str | None, side: str, **kwargs) -> float:
+        """Dynamic leverage based on dual confidence systems:
         - AI confidence from StepFun (80-90%)
         - Internal trend strength from MTF filter (0.0-1.0)
         """
         import os
 
-        # Retrieve stored confidence values
+        # Retrieve stored confidence values from custom_info (populated by populate_indicators)
         ai_confidence = self.custom_info.get(pair, {}).get('ai_confidence', 85)
         trend_strength = self.custom_info.get(pair, {}).get('trend_strength', 0.6)
 
@@ -122,7 +121,7 @@ class Claw5MHybrid(IStrategy):
         calculated = round(base_lev * ai_mult * ts_mult)
         final_leverage = max(5, min(max_lev, calculated))
 
-        return final_leverage
+        return float(final_leverage)
 
     def populate_indicators(self, dataframe: pd.DataFrame, metadata: dict) -> pd.DataFrame:
         df = dataframe.copy()
@@ -460,21 +459,6 @@ class Claw5MHybrid(IStrategy):
         if df_row.get('atr_pct', 0) > 0.001:
             base += 5
         return min(base, 95)
-
-    def leverage(self, pair: str, current_time: datetime, current_rate: float,
-                 proposed_leverage: float, max_leverage: float, entry_tag: str | None, side: str, **kwargs) -> float:
-        logger = logging.getLogger(__name__)
-        base = 50.0
-        strength = getattr(self, 'latest_trend_strength', 0.5)
-        logger.info(f"[LEV] {pair} {current_time} strength={strength:.3f} side={side}")
-        if strength >= 0.7:
-            lev = min(base * 1.5, 100)
-        elif strength >= 0.4:
-            lev = base
-        else:
-            lev = max(base * 0.5, 20)
-        logger.info(f"[LEV] -> {lev}")
-        return lev
 
     @staticmethod
     def hyperopt_loss_function(results_df: pd.DataFrame, trade_count: int, min_date: datetime,
