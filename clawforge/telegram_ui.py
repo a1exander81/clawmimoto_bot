@@ -359,6 +359,24 @@ def get_bybit_hot_pairs(limit: int = 5) -> list:
     logger.warning("Bybit hot pairs fetch failed, using fallback USDT list")
     return fallback
 
+def get_bybit_ticker_price(symbol: str) -> float | None:
+    """Fetch latest price from Bybit ticker. symbol format: BTC/USDT."""
+    try:
+        bybit_symbol = symbol.replace("/", "").upper()
+        data = bybit_signed_request(
+            "GET", "/v5/market/tickers",
+            params={"category": "linear", "symbol": bybit_symbol},
+            timeout=5
+        )
+        if data and data.get("retCode") == 0:
+            item = data.get("result", {}).get("list", [{}])[0]
+            price = float(item.get("lastPrice", 0))
+            if price > 0:
+                return price
+    except Exception as e:
+        logger.debug(f"Bybit ticker price error for {symbol}: {e}")
+    return None
+
 def get_bybit_klines(symbol: str, interval: str = "5", limit: int = 50):
     """Fetch klines from Bybit. symbol format: BTC/USDT (converted to BTCUSDT)."""
     try:
@@ -850,11 +868,16 @@ def calculate_indicators(symbol: str) -> dict:
             tr = max(high - low, abs(high - close_prev), abs(low - close_prev))
             atr_sum += tr
         atr = atr_sum / 14
+        # Use 4H close as initial value, will override with fresh ticker below
         current_price = closes_4h[-1]
         atr_pct = (atr / current_price * 100) if current_price > 0 else 0
         # Support/Resistance (4H last 10 candles)
         support = min(lows_4h[-10:])
         resistance = max(highs_4h[-10:])
+        # Fetch fresh ticker price (overwrite stale 4H close)
+        ticker_price = get_bybit_ticker_price(symbol)
+        if ticker_price and ticker_price > 0:
+            current_price = ticker_price
         return {
             "trend": trend,
             "volume_ratio": round(vol_ratio, 2),
@@ -2878,9 +2901,12 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
         return
     chat_id = update.effective_chat.id
+    # Clear stale scan cache before running new scan
+    if chat_id in user_state and "scan_results" in user_state[chat_id]:
+        user_state[chat_id].pop("scan_results", None)
     # Acknowledge immediately
     status_msg = await update.message.reply_text(
-        "🔍 **Scanning market...**\n\nFetching BingX hot pairs, analyzing 5M charts, order book, sentiment...",
+        "🔍 **Scanning market...**\n\nFetching Bybit hot pairs, analyzing 5M charts, order book, sentiment...",
         parse_mode="Markdown"
     )
 
@@ -2917,6 +2943,9 @@ async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TY
     query = update.callback_query
     await query.answer("🔄 Running fresh scan...")
     chat_id = query.message.chat_id
+    # Clear stale scan cache before refresh
+    if chat_id in user_state and "scan_results" in user_state[chat_id]:
+        user_state[chat_id].pop("scan_results", None)
 
     async def do_refresh():
         try:
