@@ -196,10 +196,11 @@ def analyze_pair_for_session(pair: str, session_cfg: dict):
         tp_distance = (sl_price - entry_price) * session_cfg["min_rrr"]
         tp_price = entry_price - tp_distance
 
-    # Validate RRR
+    # Compute RRR
     rrr = calculate_rrr(entry_price, sl_price, tp_price)
 
-    if rrr < session_cfg["min_rrr"]:
+    # Validate RRR (allow 0.01 tolerance for float precision)
+    if rrr < (session_cfg["min_rrr"] - 0.01):
         logger.info(f"{pair} RRR {rrr:.2f} < {session_cfg['min_rrr']} — skipping")
         return None
 
