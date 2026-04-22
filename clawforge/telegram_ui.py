@@ -1158,6 +1158,19 @@ async def exec_confirm_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]])
         )
         return
+    # Block meme coins and commodities
+    BLOCKED = {
+        "FARTCOIN","BONK","PEPE","SHIB","DOGE","FLOKI","WIF","MEME",
+        "DOG","RATS","SATS","PIZZA","CL","GC","SI","NG","XAUT","PAXG"
+    }
+    base = p["symbol"].replace("/USDT","").replace(":USDT","").upper()
+    if base in BLOCKED:
+        await q.edit_message_text(
+            f"⛔ {p['symbol']} is blocked\n\nMeme coins and commodities are not allowed.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]])
+        )
+        return
+
     # Prepare forcebuy
     exchange_pair = p["symbol"]
     if exchange_pair.endswith("/USDT"):
