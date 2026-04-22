@@ -1572,6 +1572,86 @@ def get_market_news():
     header = "📢 *Market Pulse - " + datetime.now(timezone.utc).strftime("%b %d, %Y") + "*"
     return f"{header}\n\n" + "\n".join(lines)
 
+# ── ClawStrike System ──
+def load_clawstrike_log():
+    """Load ClawStrike trade log from user_data."""
+    path = Path("/app/user_data/clawstrike_log.json")
+    if path.exists():
+        try:
+            return json.loads(path.read_text())
+        except Exception:
+            pass
+    return {}
+
+def save_clawstrike_log(trade_data: dict):
+    """Save ClawStrike trade log to user_data."""
+    path = Path("/app/user_data/clawstrike_log.json")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(trade_data, indent=2))
+
+def check_clawstrike_conditions(pair: str, chat_id: int) -> tuple[bool, str, dict]:
+    """
+    Check all 8 ClawStrike conditions.
+    Returns (eligible: bool, reason: str, score: dict)
+    """
+    try:
+        # Condition 1 — Session: London or NY only (SGT)
+        now_utc = datetime.now(timezone.utc)
+        now_sgt = (now_utc + timedelta(hours=8)).time()
+        hour_sgt = now_sgt.hour
+        in_london = 16 <= hour_sgt < 20
+        in_ny = 21 <= hour_sgt <= 23
+        if not (in_london or in_ny):
+            return False, "Not in London/NY session", {}
+
+        # Condition 2 — AI Score >= 8
+        # Re-use scan result (fetch fresh if needed)
+        result = ai_scan_pairs(custom_pairs=[pair], chat_id=chat_id)
+        if not result:
+            return False, "No scan data", {}
+        p = result[0]
+        ai_score = p.get("ai_score", 0)
+        if ai_score < 8:
+            return False, f"AI score too low: {ai_score}/10", {}
+
+        # Condition 3 — Confidence >= 88%
+        confidence = p.get("confidence", 0)
+        if confidence < 88:
+            return False, f"Confidence too low: {confidence}%", {}
+
+        # Condition 4 — RRR >= 3.0
+        rrr = p.get("rrr", 0)
+        if rrr < 3.0:
+            return False, f"RRR too low: {rrr:.2f}", {}
+
+        # Condition 5 — ATR > 1.5%
+        atr_pct = p.get("atr_pct", 0)
+        if atr_pct < 1.5:
+            return False, f"ATR too low: {atr_pct:.2f}%", {}
+
+        # Condition 6 — Volume > 2x average
+        vol_ratio = p.get("volume_ratio", 0)
+        if vol_ratio < 2.0:
+            return False, f"Volume too low: {vol_ratio:.1f}x", {}
+
+        # Condition 7 — No existing ClawStrike trade today
+        today = now_utc.date()
+        clawstrike_log = load_clawstrike_log()
+        if clawstrike_log.get("last_date") == str(today):
+            return False, "ClawStrike already fired today", {}
+
+        # Condition 8 — No open trades on same pair
+        open_trades = api_get("/api/v1/status") or []
+        for t in open_trades:
+            if pair in t.get("pair", ""):
+                return False, f"Already have open trade on {pair}", {}
+
+        return True, "ALL CONDITIONS MET", p
+
+    except Exception as e:
+        logger.error(f"ClawStrike check error: {e}", exc_info=True)
+        return False, f"Error: {e}", {}
+
 def generate_ta():
     lines = []
     for symbol in ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT"]:
