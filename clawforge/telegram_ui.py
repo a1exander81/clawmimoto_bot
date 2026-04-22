@@ -1441,6 +1441,32 @@ async def show_gains_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     text = f"💰 **Realized Gains**\n\n{pnl_pct:+.1f}%\n${pnl:,.2f}"
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="main")]]))
 
+# ── News & Settings Wrappers ─-
+async def show_news_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
+    q = update.callback_query
+    await q.answer()
+    news_text = get_market_news()
+    await q.edit_message_text(
+        news_text,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")]]),
+        parse_mode="Markdown",
+        disable_web_page_preview=True
+    )
+
+async def settings_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
+    q = update.callback_query
+    await q.answer()
+    text = (
+        "⚙️ **SETTINGS**\n\n"
+        "🔧 Leverage & margin controls coming soon.\n"
+        "📡 API keys, session schedules, and risk limits will appear here."
+    )
+    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")]]), parse_mode="Markdown")
+
 
 # ── Market Now ──
 
@@ -1669,12 +1695,12 @@ async def trade_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
 
     kb = [
-        [InlineKeyboardButton("📊 SCAN", callback_data="scan"),
+        [InlineKeyboardButton("📊 SCAN", callback_data="ai_scan"),
          InlineKeyboardButton("💰 BALANCE", callback_data="show_balance")],
-        [InlineKeyboardButton("📈 POSITIONS", callback_data="show_positions"),
+        [InlineKeyboardButton("📈 POSITIONS", callback_data="positions"),
          InlineKeyboardButton("📰 NEWS", callback_data="show_news")],
-        [InlineKeyboardButton("🤖 SESSION MODE", callback_data="set_session"),
-         InlineKeyboardButton("🎯 MANUAL MODE", callback_data="set_manual")],
+        [InlineKeyboardButton("🤖 SESSION MODE", callback_data="session_mode"),
+         InlineKeyboardButton("🎯 MANUAL MODE", callback_data="manual_mode")],
         [InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings"),
          InlineKeyboardButton("📊 STATS", callback_data="show_stats")],
     ]
@@ -3383,6 +3409,8 @@ def main():
     app.add_handler(CallbackQueryHandler(show_balance_cb, pattern="^show_balance$"))
     app.add_handler(CallbackQueryHandler(show_stats_cb, pattern="^show_stats$"))
     app.add_handler(CallbackQueryHandler(show_gains_cb, pattern="^show_gains$"))
+    app.add_handler(CallbackQueryHandler(show_news_cb, pattern="^show_news$"))
+    app.add_handler(CallbackQueryHandler(settings_cb, pattern="^settings$"))
     app.add_handler(CallbackQueryHandler(trade_menu_cb, pattern="^trade_menu$"))
     app.add_handler(CallbackQueryHandler(scan_pair_prompt_cb, pattern="^scan_pair_prompt$"))
     app.add_handler(CallbackQueryHandler(custom_scan_cb, pattern=r"^custom_scan_"))
