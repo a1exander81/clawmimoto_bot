@@ -30,8 +30,6 @@ COPY --from=builder /usr/local/lib/python3.13/site-packages /usr/local/lib/pytho
 COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
-COPY clawforge/ ./clawforge/
-COPY strategies/ ./strategies/
 
 # Create directories for data
 RUN mkdir -p /app/user_data/logs \

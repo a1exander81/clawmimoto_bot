@@ -345,6 +345,26 @@ def bybit_signed_request(method: str, endpoint: str, params: dict = None, body: 
         logger.error(f"Bybit API error: {e}")
         return None
 
+
+def get_bybit_ticker_price(symbol: str) -> float | None:
+    """Fetch latest price from Bybit ticker. symbol format: BTC/USDT."""
+    try:
+        bybit_symbol = symbol.replace("/", "").upper()
+        data = bybit_signed_request(
+            "GET", "/v5/market/tickers",
+            params={"category": "linear", "symbol": bybit_symbol},
+            timeout=5
+        )
+        if data and data.get("retCode") == 0:
+            item = data.get("result", {}).get("list", [{}])[0]
+            price = float(item.get("lastPrice", 0))
+            if price > 0:
+                return price
+    except Exception as e:
+        logger.debug(f"Bybit ticker price error for {symbol}: {e}")
+    return None
+
+
 def get_bybit_hot_pairs(limit: int = 5) -> list:
     """Fetch top volatile USDT perpetual pairs from Bybit ticker."""
     try:
@@ -352,10 +372,19 @@ def get_bybit_hot_pairs(limit: int = 5) -> list:
         if data and data.get("retCode") == 0:
             items = data.get("result", {}).get("list", [])
             pairs = []
+            EXCLUDED = {
+                "USDC", "BUSD", "DAI", "TUSD", "FDUSD",  # stables
+                "XAUT", "PAXG",  # gold tokens
+                "CL", "GC", "SI", "NG", "HG",  # commodity symbols
+                "GOLD", "SILVER", "OIL", "COPPER",  # commodity names
+            }
             for item in items:
                 symbol = item.get("symbol", "")
                 if symbol.endswith("USDT"):
                     base = symbol[:-4]
+                    if base in EXCLUDED:
+                        logger.info(f"Filtered out {base} — commodity/stable")
+                        continue
                     pairs.append(f"{base}/USDT")
                 if len(pairs) >= limit:
                     break
@@ -471,25 +500,25 @@ def enrich_trade_params(pair_result, chat_id):
     # Session windows (SGT): pre_london 06:00-07:00, london 16:00-20:00, ny 21:00-23:00
     if 6 <= hour_sgt < 7:
         session = "pre_london"
-        base_sl_pct = 0.015   # 1.5%
-        base_tp_pct = 0.045   # 4.5% → 3:1 RRR
+        base_sl_pct = 0.005   # 0.5% price move
+        base_tp_pct = 0.015   # 1.5% price move → 3:1 RRR
     elif 16 <= hour_sgt < 20:
         session = "london"
-        base_sl_pct = 0.015
-        base_tp_pct = 0.045
+        base_sl_pct = 0.005
+        base_tp_pct = 0.015
     elif 21 <= hour_sgt < 23:
         session = "ny"
-        base_sl_pct = 0.020   # 2.0%
-        base_tp_pct = 0.060   # 6.0% → 3:1 RRR
+        base_sl_pct = 0.007   # 0.7% price move
+        base_tp_pct = 0.021   # 2.1% price move → 3:1 RRR
     else:
         session = "manual"
-        base_sl_pct = 0.010   # 1.0%
-        base_tp_pct = 0.020   # 2.0% → 2:1 RRR
+        base_sl_pct = 0.004   # 0.4% price move
+        base_tp_pct = 0.008   # 0.8% price move → 2:1 RRR
 
-    # Apply leverage scaling as per spec: distance = base_pct / leverage
-    sl_distance = base_sl_pct / leverage
-    tp_distance = base_tp_pct / leverage
-    logger.info(f"enrich_trade_params: leverage={leverage} session={session} sl_distance={sl_distance:.6f} tp_distance={tp_distance:.6f}")
+    # SL/TP are fixed price-move percentages (already scaled for leverage exposure)
+    sl_distance = base_sl_pct
+    tp_distance = base_tp_pct
+    logger.info(f"enrich_trade_params: session={session} base_sl={base_sl_pct:.4f} base_tp={base_tp_pct:.4f}")
 
     # Compute entry, SL, TP
     entry = current_price
@@ -637,46 +666,14 @@ def get_open_trades_count() -> int:
     except Exception:
         return 0
 
-def enrich_trade_params(pair_result, chat_id):
-    """Add concrete trade parameters (entry, sl, tp, rrr, sizing) based on user state and balance."""
-    state = get_state(chat_id)
-    real, mock = get_balance()
-    mode = state.get("trade_mode", "MOCK")
-    wallet = mock if mode == "MOCK" else (real or 0)
-    leverage = state.get("leverage", 50)
-    margin_pct = state.get("margin", 1.0)
-    direction = pair_result.get("direction", "LONG")
-    current_price = pair_result.get("current_price", 0)
-    if current_price <= 0:
-        return pair_result
-    # Strategy defaults: initial SL 5%, first TP 10% (RRR = 2.0)
-    risk_pct = 0.05
-    target_pct = 0.10
-    if direction == "LONG":
-        sl = current_price * (1 - risk_pct)
-        tp = current_price * (1 + target_pct)
-    else:  # SHORT
-        sl = current_price * (1 + risk_pct)
-        tp = current_price * (1 - target_pct)
-    rrr = target_pct / risk_pct
-    # Position sizing
-    stake_amount = wallet * (margin_pct / 100)  # margin in USDT
-    position_value = stake_amount * leverage
-    quantity = position_value / current_price
-    pair_result.update({
-        "entry": round(current_price, 4),
-        "sl": round(sl, 4),
-        "tp": round(tp, 4),
-        "rrr": round(rrr, 2),
-        "stake_amount": round(stake_amount, 2),
-        "position_value": round(position_value, 2),
-        "quantity": round(quantity, 6),
-        "margin_pct": margin_pct,
-        "leverage": leverage,
-    })
-    return pair_result
+    wins = s.get("wins", 0)
+    losses = s.get("losses", 0)
+    total = wins + losses
+    win_rate = (wins / total * 100) if total > 0 else 0
+    realized_pnl = s.get("total_profit_abs", 0)
+    return wins, losses, win_rate, realized_pnl
 
-# ── Stats: wins & Gains ──
+
 def get_stats():
     s = api_get("/api/v1/stats") or {}
     wins = s.get("wins", 0)
@@ -722,28 +719,7 @@ def call_stepfun_skill(prompt, retries=2):
             time.sleep(2 ** attempt)  # exponential backoff: 1s, 2s
     return None
 
-def get_bybit_hot_pairs(limit: int = 5) -> list:
-    """Fetch top volatile USDT perpetual pairs from Bybit ticker."""
-    try:
-        data = bybit_signed_request("GET", "/v5/market/tickers", params={"category": "linear"}, timeout=5)
-        if data and data.get("retCode") == 0:
-            items = data.get("result", {}).get("list", [])
-            pairs = []
-            for item in items:
-                symbol = item.get("symbol", "")
-                if symbol.endswith("USDT"):
-                    base = symbol[:-4]
-                    pairs.append(f"{base}/USDT")
-                if len(pairs) >= limit:
-                    break
-            logger.info(f"Bybit hot USDT pairs: {pairs}")
-            if pairs:
-                return pairs
-    except Exception as e:
-        logger.debug(f"Bybit hot pairs error: {e}")
-    fallback = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"][:limit]
-    logger.warning("Bybit hot pairs fetch failed, using fallback USDT list")
-    return fallback
+
 
 def get_bybit_top_movers(limit: int = 20) -> list:
     """
@@ -766,13 +742,20 @@ def get_bybit_top_movers(limit: int = 20) -> list:
         baseline = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
         baseline_bases = {"BTC", "ETH", "SOL"}
         candidates = []
-        stable_bases = {"USDC", "BUSD", "DAI", "TUSD", "FDUSD"}  # exclude stablecoins
+        # Exclusion list: stables, gold tokens, commodities
+        EXCLUDED = {
+            "USDC", "BUSD", "DAI", "TUSD", "FDUSD",  # stables
+            "XAUT", "PAXG",  # gold tokens
+            "CL", "GC", "SI", "NG", "HG",  # commodity symbols
+            "GOLD", "SILVER", "OIL", "COPPER",  # commodity names
+        }
         for item in items:
             symbol = item.get("symbol", "")
             if not symbol.endswith("USDT"):
                 continue
             base = symbol[:-4]
-            if base in stable_bases:
+            if base in EXCLUDED:
+                logger.info(f"Filtered out {base} — commodity/stable")
                 continue
             # Skip baseline pairs — they're already included
             if base in baseline_bases:
@@ -1175,6 +1158,19 @@ async def exec_confirm_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]])
         )
         return
+    # Block meme coins and commodities
+    BLOCKED = {
+        "FARTCOIN","BONK","PEPE","SHIB","DOGE","FLOKI","WIF","MEME",
+        "DOG","RATS","SATS","PIZZA","CL","GC","SI","NG","XAUT","PAXG"
+    }
+    base = p["symbol"].replace("/USDT","").replace(":USDT","").upper()
+    if base in BLOCKED:
+        await q.edit_message_text(
+            f"⛔ {p['symbol']} is blocked\n\nMeme coins and commodities are not allowed.",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]])
+        )
+        return
+
     # Prepare forcebuy
     exchange_pair = p["symbol"]
     if exchange_pair.endswith("/USDT"):
@@ -1389,36 +1385,51 @@ async def show_balance_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     chat_id = q.message.chat_id
     state = get_state(chat_id)
-    real, mock = get_balance()
-    real_str = f"${real:,.2f} USDT" if real is not None else "N/A"
-    mock_str = f"{mock:,.0f} CLUSDT"
     mode = state.get("trade_mode", "MOCK")
-    # P&L today (realized + unrealized)
-    pnl_pct = 0.0
-    try:
-        trades = api_get("/api/v1/status") or []
-        today = datetime.now(timezone.utc).date()
-        closed_today = []
-        for t in trades:
-            close_date = None
-            if t.get('close_date'):
-                try:
-                    close_date = datetime.fromisoformat(t['close_date'].replace('Z','+00:00')).date()
-                except: pass
-            if close_date == today:
-                closed_today.append(t)
-        pnl_pct = sum(t.get('profit_pct',0) for t in closed_today)
-    except Exception:
-        pass
-    open_count = get_open_trades_count()
+    currency = "CLUSDT" if mode == "MOCK" else "USDT"
+
+    # Fetch balance data from Freqtrade API
+    balance_data = api_get("/api/v1/balance") or {}
+    # Parse free and total from balance_data (handle both top-level and currencies list)
+    free = 0.0
+    total = 0.0
+    # Try top-level keys first
+    if "free" in balance_data:
+        free = float(balance_data.get("free", 0) or 0)
+    if "total" in balance_data:
+        total = float(balance_data.get("total", 0) or 0)
+    # If currencies list present, sum available/est_stake
+    currencies = balance_data.get("currencies", [])
+    if currencies:
+        for curr in currencies:
+            # Use 'available' if present, else 'balance'
+            curr_free = float(curr.get("available", curr.get("balance", 0) or 0))
+            # Use 'est_stake' if present, else 'balance'
+            curr_total = float(curr.get("est_stake", curr.get("balance", 0) or 0))
+            free += curr_free
+            total += curr_total
+    starting = float(balance_data.get("starting_capital", 0) or 0)
+
+    # Fetch unrealized PnL from open trades
+    trades = api_get("/api/v1/status") or []
+    unrealized = sum(float(t.get("profit_abs", 0) or 0) for t in trades if t.get('is_open', False))
+    unrealized_pct = (unrealized / starting * 100) if starting else 0.0
+    total_with_pnl = free + unrealized
+    overall_pnl_pct = ((total_with_pnl - starting) / starting * 100) if starting else 0.0
+    open_count = len([t for t in trades if t.get('is_open', False)])
+
+    # Determine sign emoji
+    unrealized_sign = "➕" if unrealized >= 0 else "➖"
+
     text = (
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
         f"💰 BALANCE\n"
         f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Real: {real_str}\n"
-        f"Mock: {mock_str}\n"
-        f"Mode: {mode}\n"
-        f"P&L Today: {pnl_pct:+.1f}%\n"
+        f"Available: ${free:.2f} {currency}\n"
+        f"Unrealized: {unrealized_sign}${abs(unrealized):.2f} ({unrealized_pct:+.2f}%)\n"
+        f"Total w/ PnL: ${total_with_pnl:.2f} {currency}\n"
+        f"Started: ${starting:.2f} {currency}\n"
+        f"Overall P&L: {overall_pnl_pct:+.2f}%\n"
         f"Open Trades: {open_count}\n"
         f"━━━━━━━━━━━━━━━━━━━━━━"
     )
@@ -1442,6 +1453,32 @@ async def show_gains_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     pnl_pct = (pnl / 10000 * 100) if pnl else 0
     text = f"💰 **Realized Gains**\n\n{pnl_pct:+.1f}%\n${pnl:,.2f}"
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="main")]]))
+
+# ── News & Settings Wrappers ─-
+async def show_news_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
+    q = update.callback_query
+    await q.answer()
+    news_text = get_market_news()
+    await q.edit_message_text(
+        news_text,
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")]]),
+        parse_mode="Markdown",
+        disable_web_page_preview=True
+    )
+
+async def settings_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
+    q = update.callback_query
+    await q.answer()
+    text = (
+        "⚙️ **SETTINGS**\n\n"
+        "🔧 Leverage & margin controls coming soon.\n"
+        "📡 API keys, session schedules, and risk limits will appear here."
+    )
+    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")]]), parse_mode="Markdown")
 
 
 # ── Market Now ──
@@ -1653,15 +1690,34 @@ async def trade_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     chat_id = q.message.chat_id
     state = get_state(chat_id)
+    mode = state.get("trade_mode", "MOCK")
+    trading_mode = state.get("mode", "manual")
+    mode_emoji = "🤖" if trading_mode == "session" else "🎯"
+    dry_emoji = "🔵" if mode == "MOCK" else "🔴"
     real, mock = get_balance()
-    bal = format_balance(real, mock, state["trade_mode"])
+    bal = mock if mode == "MOCK" else (real or 0)
+    currency = "CLUSDT" if mode == "MOCK" else "USDT"
+
+    text = (
+        f"╔══════════════════════╗\n"
+        f"║ 🦅 CLAWMIMOTO ║\n"
+        f"║ Trading Terminal ║\n"
+        f"╚══════════════════════╝\n\n"
+        f"{dry_emoji} {mode} | {mode_emoji} {trading_mode.upper()}\n"
+        f"💰 Balance: {bal:.2f} {currency}\n"
+    )
+
     kb = [
-        [InlineKeyboardButton("🤖 SESSION MODE", callback_data="session_mode")],
-        [InlineKeyboardButton("👷 MANUAL MODE", callback_data="manual_mode")],
-        [InlineKeyboardButton("🔍 SCAN PAIR", callback_data="scan_pair_prompt")],
-        [InlineKeyboardButton("⬅️ BACK", callback_data="main")],
+        [InlineKeyboardButton("📊 SCAN", callback_data="ai_scan"),
+         InlineKeyboardButton("💰 BALANCE", callback_data="show_balance")],
+        [InlineKeyboardButton("📈 POSITIONS", callback_data="positions"),
+         InlineKeyboardButton("📰 NEWS", callback_data="show_news")],
+        [InlineKeyboardButton("🤖 SESSION MODE", callback_data="session_mode"),
+         InlineKeyboardButton("🎯 MANUAL MODE", callback_data="manual_mode")],
+        [InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings"),
+         InlineKeyboardButton("📊 STATS", callback_data="show_stats")],
     ]
-    await q.edit_message_text(f"⏰ **Select Trading Mode**\n\nBalance: {bal}", reply_markup=InlineKeyboardMarkup(kb))
+    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 async def scan_pair_prompt_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Show popular pair buttons for custom AI scan."""
@@ -3366,6 +3422,8 @@ def main():
     app.add_handler(CallbackQueryHandler(show_balance_cb, pattern="^show_balance$"))
     app.add_handler(CallbackQueryHandler(show_stats_cb, pattern="^show_stats$"))
     app.add_handler(CallbackQueryHandler(show_gains_cb, pattern="^show_gains$"))
+    app.add_handler(CallbackQueryHandler(show_news_cb, pattern="^show_news$"))
+    app.add_handler(CallbackQueryHandler(settings_cb, pattern="^settings$"))
     app.add_handler(CallbackQueryHandler(trade_menu_cb, pattern="^trade_menu$"))
     app.add_handler(CallbackQueryHandler(scan_pair_prompt_cb, pattern="^scan_pair_prompt$"))
     app.add_handler(CallbackQueryHandler(custom_scan_cb, pattern=r"^custom_scan_"))

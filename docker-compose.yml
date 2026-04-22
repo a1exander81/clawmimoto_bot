@@ -14,9 +14,9 @@ services:
     volumes:
       - ./user_data:/app/user_data
       - ./configs:/app/configs
-      - ./strategies:/app/strategies:ro
+      - ./strategies:/app/strategies
       - ./generated:/app/generated
-      - ./clawforge:/app/clawforge:ro
+      - ./clawforge:/app/clawforge
     environment:
       - BYBIT_API_KEY=${BYBIT_API_KEY}
       - BYBIT_API_SECRET=${BYBIT_API_SECRET}
@@ -50,8 +50,8 @@ services:
       - claw-isolation
     volumes:
       - ./configs:/app/configs
-      - ./strategies:/app/strategies:ro
-      - ./clawforge:/app/clawforge:ro
+      - ./strategies:/app/strategies
+      - ./clawforge:/app/clawforge
       - ./generated:/app/generated
     environment:
       - BYBIT_API_KEY=${BYBIT_API_KEY}

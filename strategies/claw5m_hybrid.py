@@ -24,10 +24,10 @@ class Claw5MHybrid(IStrategy):
 
     # ── Risk Management ──
     max_open_trades = 3
-    stoploss = -0.004
+    stoploss = -0.02
     trailing_stop = True
-    trailing_stop_positive = 0.15
-    trailing_stop_positive_offset = 0.20
+    trailing_stop_positive = 0.20
+    trailing_stop_positive_offset = 0.25
     trailing_only_offset_is_reached = True
     minimal_roi = {
         "0": 0.20,
@@ -325,6 +325,11 @@ class Claw5MHybrid(IStrategy):
         """
         # Get actual leverage used for this trade
         leverage = getattr(trade, 'leverage', 50) or 50
+
+        # ── MINIMUM TRADE DURATION (no trailing/adjustments before 5min) ──
+        trade_duration = (current_time - trade.open_date_utc).total_seconds() / 60
+        if trade_duration < 5:
+            return self.stoploss  # use base SL only, no early trailing
 
         # ── PROFIT PROTECTION (highest priority) ──
         if current_profit >= 0.10:
