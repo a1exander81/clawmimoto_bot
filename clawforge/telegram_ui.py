@@ -673,6 +673,16 @@ def get_open_trades_count() -> int:
     realized_pnl = s.get("total_profit_abs", 0)
     return wins, losses, win_rate, realized_pnl
 
+
+def get_stats():
+    s = api_get("/api/v1/stats") or {}
+    wins = s.get("wins", 0)
+    losses = s.get("losses", 0)
+    total = wins + losses
+    win_rate = (wins / total * 100) if total > 0 else 0
+    realized_pnl = s.get("total_profit_abs", 0)
+    return wins, losses, win_rate, realized_pnl
+
 def format_wins():
     w, l, wr, _ = get_stats()
     return f"{w}/{l} ({wr:.0f}%)"
@@ -1641,15 +1651,34 @@ async def trade_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     chat_id = q.message.chat_id
     state = get_state(chat_id)
+    mode = state.get("trade_mode", "MOCK")
+    trading_mode = state.get("mode", "manual")
+    mode_emoji = "🤖" if trading_mode == "session" else "🎯"
+    dry_emoji = "🔵" if mode == "MOCK" else "🔴"
     real, mock = get_balance()
-    bal = format_balance(real, mock, state["trade_mode"])
+    bal = mock if mode == "MOCK" else (real or 0)
+    currency = "CLUSDT" if mode == "MOCK" else "USDT"
+
+    text = (
+        f"╔══════════════════════╗\n"
+        f"║ 🦅 CLAWMIMOTO ║\n"
+        f"║ Trading Terminal ║\n"
+        f"╚══════════════════════╝\n\n"
+        f"{dry_emoji} {mode} | {mode_emoji} {trading_mode.upper()}\n"
+        f"💰 Balance: {bal:.2f} {currency}\n"
+    )
+
     kb = [
-        [InlineKeyboardButton("🤖 SESSION MODE", callback_data="session_mode")],
-        [InlineKeyboardButton("👷 MANUAL MODE", callback_data="manual_mode")],
-        [InlineKeyboardButton("🔍 SCAN PAIR", callback_data="scan_pair_prompt")],
-        [InlineKeyboardButton("⬅️ BACK", callback_data="main")],
+        [InlineKeyboardButton("📊 SCAN", callback_data="scan"),
+         InlineKeyboardButton("💰 BALANCE", callback_data="show_balance")],
+        [InlineKeyboardButton("📈 POSITIONS", callback_data="show_positions"),
+         InlineKeyboardButton("📰 NEWS", callback_data="show_news")],
+        [InlineKeyboardButton("🤖 SESSION MODE", callback_data="set_session"),
+         InlineKeyboardButton("🎯 MANUAL MODE", callback_data="set_manual")],
+        [InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings"),
+         InlineKeyboardButton("📊 STATS", callback_data="show_stats")],
     ]
-    await q.edit_message_text(f"⏰ **Select Trading Mode**\n\nBalance: {bal}", reply_markup=InlineKeyboardMarkup(kb))
+    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
 async def scan_pair_prompt_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Show popular pair buttons for custom AI scan."""
