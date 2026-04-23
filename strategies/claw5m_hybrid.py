@@ -26,8 +26,8 @@ class Claw5MHybrid(IStrategy):
     max_open_trades = 3
     stoploss = -0.02
     trailing_stop = True
-    trailing_stop_positive = 0.20
-    trailing_stop_positive_offset = 0.25
+    trailing_stop_positive = 0.03
+    trailing_stop_positive_offset = 0.05
     trailing_only_offset_is_reached = True
     minimal_roi = {
         "0": 0.20,
@@ -226,6 +226,19 @@ class Claw5MHybrid(IStrategy):
 
         base_cond = cond_ema & cond_ha & cond_volume & cond_session & cond_atr
 
+        # FIX 3: 1H EMA50 trend filter — only LONG above EMA50, SHORT below
+        try:
+            pair_1h = metadata.get('pair')
+            if pair_1h:
+                df_1h = self.dp.get_pair_dataframe(pair=pair_1h, timeframe='1h')
+                if len(df_1h) > 0:
+                    ema50_1h = df_1h['close'].ewm(span=50, adjust=False).mean().iloc[-1]
+                    current_close = dataframe['close'].iloc[-1]
+                    cond_ema50_1h = current_close >= ema50_1h
+                    base_cond = base_cond & cond_ema50_1h
+        except Exception:
+            pass  # If 1H data unavailable, proceed without filter
+
         # MTF filtering
         trend_bias, trend_strength, confidence = self.get_1h_trend_strength()
         macro_bias = self.get_macro_bias()
@@ -365,12 +378,26 @@ class Claw5MHybrid(IStrategy):
         - Stop trading if daily PnL hits +150% (target reached)
         - Stop trading if daily PnL hits -30% (protect capital)
         - Max 7 total trades per day (3 session + 4 manual)
+        - Blocklist: meme coins, stablecoins, commodities, price < 1.0
         """
         try:
             from freqtrade.persistence import Trade
             import logging as _logging
             _logging.basicConfig(level=_logging.INFO)
             logger = _logging.getLogger(__name__)
+
+            # ── FIX 2: Extended blocklist + price guard ──
+            BLOCKLIST = {
+                'BABYDOGE','CHEEMS','MOG','FLOKI','CHIP','QUBIC',
+                'SATS','RATS','ORDI','CL','GC','SI','NG','XAUT','PAXG'
+            }
+            base = pair.split('/')[0] if '/' in pair else pair.split(':')[0]
+            if base in BLOCKLIST:
+                self.log_once(f"❌ Blocked pair: {base} (blocklist)", _logging.INFO)
+                return False
+            if rate < 1.0:
+                self.log_once(f"❌ Price too low: {rate:.4f} USDT", _logging.INFO)
+                return False
 
             today = current_time.date()
 
@@ -404,6 +431,20 @@ class Claw5MHybrid(IStrategy):
             # Max trades check (7 total)
             if len(open_trades) >= 7:
                 return False
+
+            # FIX 4: BTC 4H regime check — block non-BTC/ETH when BTC is range-bound (<1.5% 4H candle)
+            try:
+                btc_pair = 'BTC/USDT:USDT'
+                btc_df = self.dp.get_pair_dataframe(pair=btc_pair, timeframe='4h')
+                if len(btc_df) >= 1:
+                    last = btc_df.iloc[-1]
+                    # 4H candle range as % of low
+                    candle_range = abs(last['high'] - last['low']) / last['low'] * 100
+                    if candle_range < 1.5 and pair not in (btc_pair, 'ETH/USDT:USDT'):
+                        self.log_once(f"❌ BTC ranging ({candle_range:.1f}%) — blocking {pair}", _logging.INFO)
+                        return False
+            except Exception:
+                pass  # If data unavailable, allow trade
 
         except Exception as e:
             pass  # Never block trades due to circuit breaker error
