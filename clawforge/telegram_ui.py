@@ -156,16 +156,16 @@ if ENV_PATH.exists():
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7093901111")
-API_URL = os.getenv("FREQTRADE_API_URL", "http://127.0.0.1:8080")
-API_USER = os.getenv("FREQTRADE_API_USER", "admin")
-API_PASS = os.getenv("FREQTRADE_API_PASS", "admin")
+API_URL = os.getenv("FREQTRADE_API_URL", "http://172.19.0.2:8080")
+API_USER = os.getenv("FREQTRADE_API_USER", "clawforge")
+API_PASS = os.getenv("FREQTRADE_API_PASS", "CiRb7PvcBwsVVs7XnKvw")
 BINGX_API_KEY = os.getenv("BINGX_API_KEY")
 BINGX_API_SECRET = os.getenv("BINGX_API_SECRET")
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
-STEPFUN_API_KEY = os.getenv("STEPFUN_API_KEY")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 
 AUTH_HEADER = {"Authorization": f"Basic {base64.b64encode(f'{API_USER}:{API_PASS}'.encode()).decode()}"}
 
@@ -694,12 +694,38 @@ def format_gains():
 
 # ── AI Scan ──
 def call_stepfun_skill(prompt, retries=2):
-    """Call StepFun API with timeout and retry. Returns AI text or None."""
-    if not STEPFUN_API_KEY:
+    """AI scoring via Groq (llama-3.3-70b) — drop-in replacement for StepFun."""
+    import os
+    api_key = os.getenv("GROQ_API_KEY", "")
+    if not api_key:
+        logger.error("GROQ_API_KEY not set")
         return None
-    headers = {"Authorization": f"Bearer {STEPFUN_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
     payload = {
-        "model": "step-3.5-flash",
+        "model": "llama-3.3-70b-versatile",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,
+        "max_tokens": 500,
+    }
+    for attempt in range(retries):
+        try:
+            r = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                json=payload, headers=headers, timeout=30
+            )
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"].strip()
+            else:
+                logger.warning(f"Groq API error {r.status_code}: {r.text[:200]}")
+        except Exception as e:
+            logger.warning(f"Groq attempt {attempt+1} failed: {e}")
+    return None
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": "llama-3.3-70b-versatile",
         "messages": [
             {"role": "system", "content": "You are an expert crypto scalping analyst. Provide concise TA with confidence %% (80-90) and RRR."},
             {"role": "user", "content": prompt}
@@ -709,7 +735,7 @@ def call_stepfun_skill(prompt, retries=2):
     for attempt in range(retries + 1):
         try:
             logger.debug(f"StepFun call attempt {attempt+1}/{retries+1} for: {prompt[:60]}...")
-            r = requests.post("https://api.stepfun.ai/v1/chat/completions", json=payload, headers=headers, timeout=30)
+            r = requests.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=30)
             if r.status_code == 200:
                 return r.json()["choices"][0]["message"]["content"]
             logger.warning(f"StepFun HTTP {r.status_code}: {r.text[:100]}")
@@ -902,13 +928,39 @@ def calculate_indicators(symbol: str) -> dict:
         return {}
 
 
-def call_stepfun_skill(prompt: str, retries: int = 2) -> str | None:
-    """Call StepFun API with timeout/retry. Returns text or None."""
-    if not STEPFUN_API_KEY:
+def call_stepfun_skill(prompt, retries=2):
+    """AI scoring via Groq (llama-3.3-70b) — drop-in replacement for StepFun."""
+    import os
+    api_key = os.getenv("GROQ_API_KEY", "")
+    if not api_key:
+        logger.error("GROQ_API_KEY not set")
         return None
-    headers = {"Authorization": f"Bearer {STEPFUN_API_KEY}", "Content-Type": "application/json"}
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json"
+    }
     payload = {
-        "model": "step-3.5-flash",
+        "model": "llama-3.3-70b-versatile",
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": 0.3,
+        "max_tokens": 500,
+    }
+    for attempt in range(retries):
+        try:
+            r = requests.post(
+                "https://api.groq.com/openai/v1/chat/completions",
+                json=payload, headers=headers, timeout=30
+            )
+            if r.status_code == 200:
+                return r.json()["choices"][0]["message"]["content"].strip()
+            else:
+                logger.warning(f"Groq API error {r.status_code}: {r.text[:200]}")
+        except Exception as e:
+            logger.warning(f"Groq attempt {attempt+1} failed: {e}")
+    return None
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    payload = {
+        "model": "llama-3.3-70b-versatile",
         "messages": [
             {"role": "system", "content": "You are an expert crypto scalping analyst. Provide concise TA with confidence %% (80-90) and RRR."},
             {"role": "user", "content": prompt}
@@ -918,7 +970,7 @@ def call_stepfun_skill(prompt: str, retries: int = 2) -> str | None:
     for attempt in range(retries + 1):
         try:
             logger.debug(f"StepFun call attempt {attempt+1}/{retries+1} for: {prompt[:60]}...")
-            r = requests.post("https://api.stepfun.ai/v1/chat/completions", json=payload, headers=headers, timeout=30)
+            r = requests.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=30)
             if r.status_code == 200:
                 return r.json()["choices"][0]["message"]["content"]
             logger.warning(f"StepFun HTTP {r.status_code}: {r.text[:100]}")
@@ -3064,7 +3116,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         # Get open trades count from API
         try:
-            r = requests.get('http://127.0.0.1:8080/api/v1/status', timeout=3)
+            r = requests.get('http://172.19.0.2:8080/api/v1/status', auth=(API_USER, API_PASS), timeout=3)
             if r.status_code == 200:
                 trades_list = r.json()
                 if isinstance(trades_list, list):
@@ -3177,7 +3229,7 @@ async def profit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # Open trades (unrealized) — use /api/v1/status which returns list of open trades
-        r_open = requests.get('http://127.0.0.1:8080/api/v1/status', timeout=5)
+        r_open = requests.get('http://172.19.0.2:8080/api/v1/status', auth=(API_USER, API_PASS), timeout=5)
         if r_open.status_code == 200:
             open_trades = r_open.json()
             if isinstance(open_trades, list):
@@ -3192,7 +3244,7 @@ async def profit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append("❌ Cannot fetch open trades")
 
         # Closed trades (realized) — last 20
-        r_closed = requests.get('http://127.0.0.1:8080/api/v1/trades?status=closed&limit=20', timeout=5)
+        r_closed = requests.get('http://172.19.0.2:8080/api/v1/trades?status=closed&limit=20', auth=(API_USER, API_PASS), timeout=5)
         if r_closed.status_code == 200:
             data_closed = r_closed.json()
             closed_trades = data_closed.get('trades', [])
@@ -3247,7 +3299,7 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
         # Open trades (unrealized) — filter those opened today
-        r_open = requests.get('http://127.0.0.1:8080/api/v1/status', timeout=5)
+        r_open = requests.get('http://172.19.0.2:8080/api/v1/status', auth=(API_USER, API_PASS), timeout=5)
         open_today = []
         if r_open.status_code == 200:
             open_trades = r_open.json()
@@ -3266,7 +3318,7 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lines.append("📈 No open trades from today yet")
 
         # Closed trades (realized) — opened today
-        r_closed = requests.get('http://127.0.0.1:8080/api/v1/trades?status=closed&limit=50', timeout=5)
+        r_closed = requests.get('http://172.19.0.2:8080/api/v1/trades?status=closed&limit=50', auth=(API_USER, API_PASS), timeout=5)
         closed_today = []
         if r_closed.status_code == 200:
             data_closed = r_closed.json()
