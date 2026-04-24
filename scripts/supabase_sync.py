@@ -26,7 +26,7 @@ HEADERS = {
     "apikey": SUPABASE_KEY,
     "Authorization": f"Bearer {SUPABASE_KEY}",
     "Content-Type": "application/json",
-    "Prefer": "resolution=merge-duplicates,return=minimal"
+    "Prefer": "resolution=merge-duplicates,return=representation"
 }
 
 def ft_get(endpoint):
@@ -46,7 +46,7 @@ def supabase_upsert(table, data):
             json=data if isinstance(data, list) else [data],
             timeout=10
         )
-        if r.status_code in [200, 201]:
+        if r.status_code in [200, 201, 204]:
             return True
         logger.error(f"Supabase error {r.status_code}: {r.text[:200]}")
     except Exception as e:
