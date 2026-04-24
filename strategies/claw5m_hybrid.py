@@ -26,8 +26,8 @@ class Claw5MHybrid(IStrategy):
     max_open_trades = 3
     stoploss = -0.02
     trailing_stop = True
-    trailing_stop_positive = 0.03
-    trailing_stop_positive_offset = 0.05
+    trailing_stop_positive = 0.01
+    trailing_stop_positive_offset = 0.02
     trailing_only_offset_is_reached = True
     minimal_roi = {
         "0": 0.20,

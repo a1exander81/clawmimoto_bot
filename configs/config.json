@@ -55,8 +55,8 @@
     "enabled": true,
     "listen_ip_address": "0.0.0.0",
     "listen_port": 8080,
-    "username": "admin",
-    "password": "admin",
+    "username": "clawforge",
+    "password": "CiRb7PvcBwsVVs7XnKvw",
     "jwt_secret_key": "somethingRandomSomethingRandom123"
   },
   "leverage_tier_loading": false,

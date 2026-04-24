@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 FREQTRADE_URL = "http://localhost:8080"
-AUTH = ("admin", "admin")
+AUTH = ("clawforge", "CiRb7PvcBwsVVs7XnKvw")
 
 def fetch_trades():
     r = requests.get(
