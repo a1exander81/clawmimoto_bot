@@ -166,6 +166,8 @@ BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
+SUPABASE_URL = os.getenv("SUPABASE_URL", "https://aauypnqsmyxzacchbiya.supabase.co")
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhdXlwbnFzbXl4emFjY2hiaXlhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5Nzg2MDUsImV4cCI6MjA5MjU1NDYwNX0.H8RbnYbUb55jr0RnOVpca2wkYgv_jKs8NuUHjruqWls")
 
 AUTH_HEADER = {"Authorization": f"Basic {base64.b64encode(f'{API_USER}:{API_PASS}'.encode()).decode()}"}
 
@@ -3824,20 +3826,25 @@ async def history_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
     try:
-        import urllib.request, json, ssl
-        SUPABASE_URL = "https://aauypnqsmyxzacchbiya.supabase.co"
-        SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhdXlwbnFzbXl4emFjY2hiaXlhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5Nzg2MDUsImV4cCI6MjA5MjU1NDYwNX0.H8RbnYbUb55jr0RnOVpca2wkYgv_jKs8NuUHjruqWls"
-        url = f"{SUPABASE_URL}/rest/v1/trades?is_open=eq.false&order=close_date.desc&limit=10"
-        req = urllib.request.Request(url, headers={"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}"})
-        ctx2 = ssl.create_default_context()
-        with urllib.request.urlopen(req, context=ctx2, timeout=10) as res:
-            trades = json.loads(res.read().decode())
+        import asyncio
+        def _fetch_history():
+            import requests as _req
+            r = _req.get(
+                f"{SUPABASE_URL}/rest/v1/trades",
+                params={"is_open": "eq.false", "order": "close_date.desc", "limit": "10"},
+                headers={"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+                timeout=10
+            )
+            r.raise_for_status()
+            return r.json()
+        trades = await asyncio.get_event_loop().run_in_executor(None, _fetch_history)
         if not trades:
             text = "📋 *TRADE HISTORY*\n\nNo closed trades yet\."
         else:
             lines = ["📋 *TRADE HISTORY*", "━━━━━━━━━━━━━━━━━━━━", ""]
             for t in trades:
-                pair = (t.get("pair") or "").replace("/USDT:USDT", "").replace("USDT", "")
+                raw_pair = t.get("pair") or ""
+pair = raw_pair.split("/", 1)[0] if "/" in raw_pair else raw_pair
                 direction = t.get("direction") or "LONG"
                 profit_pct = (t.get("profit_ratio") or 0) * 100
                 profit_abs = t.get("profit_abs") or 0

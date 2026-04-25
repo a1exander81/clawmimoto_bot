@@ -333,7 +333,7 @@ class Claw5MHybrid(IStrategy):
         3. Profit protection tiers
         """
         # Get actual leverage used for this trade
-        leverage = getattr(trade, 'leverage', 20) or 20
+        leverage = getattr(trade, 'leverage', None) or int(os.environ.get("DEFAULT_LEVERAGE", 20))
 
         # ── MINIMUM TRADE DURATION (no trailing/adjustments before 5min) ──
         trade_duration = (current_time - trade.open_date_utc).total_seconds() / 60
