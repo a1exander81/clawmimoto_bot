@@ -3844,7 +3844,7 @@ async def history_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             lines = ["📋 *TRADE HISTORY*", "━━━━━━━━━━━━━━━━━━━━", ""]
             for t in trades:
                 raw_pair = t.get("pair") or ""
-pair = raw_pair.split("/", 1)[0] if "/" in raw_pair else raw_pair
+                pair = raw_pair.split("/", 1)[0] if "/" in raw_pair else raw_pair
                 direction = t.get("direction") or "LONG"
                 profit_pct = (t.get("profit_ratio") or 0) * 100
                 profit_abs = t.get("profit_abs") or 0
