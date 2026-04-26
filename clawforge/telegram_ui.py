@@ -696,223 +696,229 @@ def format_gains():
     return f"{pnl_pct:+.2f}% (${pnl_abs:,.2f})"
 
 # ── AI Scan ──
-def call_stepfun_skill(prompt, retries=2):
-    """AI scoring — Groq primary, static fallback."""
-    import os
-    
-    # PRIMARY: Groq
-    groq_key = os.getenv("GROQ_API_KEY", "")
-    if groq_key:
-        headers = {
-            "Authorization": f"Bearer {groq_key}",
-            "Content-Type": "application/json"
-        }
-        payload = {
-            "model": "llama-3.1-8b-instant",
-            "messages": [{"role": "user", "content": prompt}],
-            "temperature": 0.3,
-            "max_tokens": 500,
-        }
-        for attempt in range(retries):
-            try:
-                r = requests.post(
-                    "https://api.groq.com/openai/v1/chat/completions",
-                    json=payload, headers=headers, timeout=30
-                )
-                if r.status_code == 200:
-                    return r.json()["choices"][0]["message"]["content"].strip()
-                elif r.status_code == 429:
-                    logger.warning("Groq rate limit — waiting 5s")
-                    import time; time.sleep(5)
-                else:
-                    logger.warning(f"Groq error {r.status_code}: {r.text[:100]}")
-            except Exception as e:
-                logger.warning(f"Groq attempt {attempt+1} failed: {e}")
-    
-    # FALLBACK: Static score
-    logger.warning("All AI APIs failed — using static fallback score")
-    return "AI Score: 5/10\nNote: AI temporarily unavailable. Manual review recommended."
-
-
-def get_bybit_top_movers(limit: int = 20) -> list:
-    """
-    Fetch top movers from Bybit with STRICT filters:
-    - Min USD turnover (turnover24h) > $50M
-    - Max 4H move: ±15% (avoid already-moved pairs)
-    - Min price: $0.10
-    - Volume spike: > 2× 20-candle average
-    - Exclude stablecoins (USDC, BUSD, DAI, TUSD, FDUSD)
-    - Always include BTC, ETH, SOL as baseline
-    - Add top 3 additional movers only (no duplicates)
-    Returns list of symbols like "BTC/USDT".
-    """
+def get_bybit_ohlcv(symbol, interval="5", limit=100):
+    """Fetch OHLCV candles from Bybit."""
     try:
-        data = bybit_signed_request("GET", "/v5/market/tickers", params={"category": "linear"}, timeout=5)
-        if not data or data.get("retCode") != 0:
-            raise ValueError("Bybit tickers API failed")
-        items = data.get("result", {}).get("list", [])
-        
-        baseline = ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
-        baseline_bases = {"BTC", "ETH", "SOL"}
-        candidates = []
-        # Exclusion list: stables, gold tokens, commodities
-        EXCLUDED = {
-            "USDC", "BUSD", "DAI", "TUSD", "FDUSD",  # stables
-            "XAUT", "PAXG",  # gold tokens
-            "CL", "GC", "SI", "NG", "HG",  # commodity symbols
-            "GOLD", "SILVER", "OIL", "COPPER",  # commodity names
-        }
-        for item in items:
-            symbol = item.get("symbol", "")
-            if not symbol.endswith("USDT"):
-                continue
-            base = symbol[:-4]
-            if base in EXCLUDED:
-                logger.info(f"Filtered out {base} — commodity/stable")
-                continue
-            # Skip baseline pairs — they're already included
-            if base in baseline_bases:
-                continue
-            try:
-                turnover_24h = float(item.get("turnover24h", 0))   # USD turnover
-                last_price = float(item.get("lastPrice", 0))
-            except (TypeError, ValueError):
-                continue
-            # Min price $0.10
-            if last_price <= 0.10:
-                continue
-            # Min USD turnover > $50M (liquidity filter)
-            if turnover_24h < 50_000_000:
-                continue
-            # Fetch 4H candles
-            try:
-                klines_4h = bybit_signed_request(
-                    "GET", "/v5/market/kline",
-                    params={"category": "linear", "symbol": symbol, "interval": "240", "limit": 20},
-                    timeout=5
-                )
-                if klines_4h and klines_4h.get("retCode") == 0:
-                    k_list = klines_4h.get("result", {}).get("list", [])
-                    if len(k_list) >= 20:
-                        volumes = [float(k[5]) for k in k_list]
-                        avg_vol = sum(volumes) / len(volumes)
-                        # Volume spike: > 2x avg
-                        vol_24h_base = float(item.get("volume24h", 0))
-                        if vol_24h_base < avg_vol * 2.0:
-                            continue
-                        # 4H price change (close-to-close)
-                        open_4h = float(k_list[-1][4])   # oldest close
-                        close_4h = float(k_list[0][4])    # newest close
-                        if open_4h <= 0:
-                            continue
-                        pct_4h = (close_4h - open_4h) / open_4h * 100
-                        # Max move ±15%
-                        if abs(pct_4h) > 15.0:
-                            continue
-                        candidates.append({
-                            "symbol": f"{base}/USDT",
-                            "bybit_symbol": symbol,
-                            "price": last_price,
-                            "vol_24h": vol_24h_base,
-                            "avg_vol": avg_vol,
-                            "vol_ratio": vol_24h_base / avg_vol if avg_vol > 0 else 0,
-                            "pct_4h": pct_4h,
-                        })
-            except Exception as e:
-                logger.debug(f"Kline fetch failed for {symbol}: {e}")
-                continue
-        # Sort by volume ratio desc, then 4H move magnitude
-        candidates.sort(key=lambda x: (x["vol_ratio"], abs(x["pct_4h"])), reverse=True)
-        top_extra = [c["symbol"] for c in candidates[:3]]  # only top 3 movers
-        final_list = baseline + top_extra
-        logger.info(f"Bybit top movers: baseline={baseline}, extra={top_extra}")
-        return final_list
+        sym = symbol.replace("/USDT:USDT","USDT").replace("/","")
+        r = requests.get(
+            "https://api.bybit.com/v5/market/kline",
+            params={"category":"linear","symbol":sym,"interval":interval,"limit":limit},
+            timeout=10
+        )
+        if r.status_code != 200:
+            return None
+        raw = r.json().get("result",{}).get("list",[])
+        if not raw:
+            return None
+        import pandas as pd
+        df = pd.DataFrame(raw, columns=["timestamp","open","high","low","close","volume","turnover"])
+        for col in ["open","high","low","close","volume"]:
+            df[col] = df[col].astype(float)
+        df = df.iloc[::-1].reset_index(drop=True)
+        return df
     except Exception as e:
-        logger.error(f"get_bybit_top_movers failed: {e}")
-        return ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+        logger.warning(f"OHLCV error {symbol}: {e}")
+        return None
 
-def calculate_indicators(symbol: str) -> dict:
-    """
-    Fetch 1H and 4H klines from Bybit and compute:
-    - trend: EMA8 vs EMA20 crossover (1H)
-    - volume_ratio: current 5-period volume vs 20-period average (1H)
-    - atr_pct: ATR(14) / price (4H)
-    - support: lowest low of last 10 candles (4H)
-    - resistance: highest high of last 10 candles (4H)
-    Returns dict with metrics.
-    """
+def get_order_book(symbol):
+    """Fetch order book bid/ask ratio from Bybit."""
     try:
-        bybit_symbol = symbol.replace("/", "").upper()
-        # Fetch 1H klines (50 candles)
-        klines_1h = bybit_signed_request(
-            "GET", "/v5/market/kline",
-            params={"category": "linear", "symbol": bybit_symbol, "interval": "60", "limit": 50},
-            timeout=5
+        sym = symbol.replace("/USDT:USDT","USDT").replace("/","")
+        r = requests.get(
+            "https://api.bybit.com/v5/market/orderbook",
+            params={"category":"linear","symbol":sym,"limit":25},
+            timeout=10
         )
-        # Fetch 4H klines (50 candles)
-        klines_4h = bybit_signed_request(
-            "GET", "/v5/market/kline",
-            params={"category": "linear", "symbol": bybit_symbol, "interval": "240", "limit": 50},
-            timeout=5
+        if r.status_code != 200:
+            return 0.5
+        data = r.json().get("result",{})
+        bids = sum(float(b[1]) for b in data.get("b",[]))
+        asks = sum(float(a[1]) for a in data.get("a",[]))
+        total = bids + asks
+        return bids/total if total > 0 else 0.5
+    except Exception as e:
+        logger.warning(f"Order book error {symbol}: {e}")
+        return 0.5
+
+def get_funding_rate(symbol):
+    """Fetch current funding rate from Bybit."""
+    try:
+        sym = symbol.replace("/USDT:USDT","USDT").replace("/","")
+        r = requests.get(
+            "https://api.bybit.com/v5/market/tickers",
+            params={"category":"linear","symbol":sym},
+            timeout=10
         )
-        if not klines_1h or not klines_4h:
-            return {}
-        k1 = klines_1h.get("result", {}).get("list", [])
-        k4 = klines_4h.get("result", {}).get("list", [])
-        if len(k1) < 20 or len(k4) < 20:
-            return {}
-        # Extract closes, highs, lows, volumes (Bybit returns: [timestamp, open, high, low, close, volume, turnover])
-        closes_1h = [float(c[4]) for c in k1]
-        highs_1h = [float(c[2]) for c in k1]
-        lows_1h = [float(c[3]) for c in k1]
-        volumes_1h = [float(c[5]) for c in k1]
-        closes_4h = [float(c[4]) for c in k4]
-        highs_4h = [float(c[2]) for c in k4]
-        lows_4h = [float(c[3]) for c in k4]
-        # EMA8 vs EMA20 (1H) — simple
-        def ema(data, period):
-            alpha = 2 / (period + 1)
-            ema_val = data[-period]
-            for price in data[-period+1:]:
-                ema_val = alpha * price + (1 - alpha) * ema_val
-            return ema_val
-        ema8 = ema(closes_1h, 8)
-        ema20 = ema(closes_1h, 20)
-        trend = "BULLISH" if ema8 > ema20 else "BEARISH"
-        # Volume ratio (1H): avg of last 5 vs last 20
-        vol_recent = sum(volumes_1h[-5:]) / 5
-        vol_avg = sum(volumes_1h[-20:]) / 20
-        vol_ratio = vol_recent / vol_avg if vol_avg > 0 else 0
-        # ATR % (4H, period 14)
-        atr_sum = 0
-        for i in range(-14, 0):
-            high = highs_4h[i]
-            low = lows_4h[i]
-            close_prev = closes_4h[i-1]
-            tr = max(high - low, abs(high - close_prev), abs(low - close_prev))
-            atr_sum += tr
-        atr = atr_sum / 14
-        # Use 4H close as initial value, will override with fresh ticker below
-        current_price = closes_4h[-1]
-        atr_pct = (atr / current_price * 100) if current_price > 0 else 0
-        # Support/Resistance (4H last 10 candles)
-        support = min(lows_4h[-10:])
-        resistance = max(highs_4h[-10:])
-        # Fetch fresh ticker price (overwrite stale 4H close)
-        ticker_price = get_bybit_ticker_price(symbol)
-        if ticker_price and ticker_price > 0:
-            current_price = ticker_price
+        if r.status_code != 200:
+            return 0.0
+        data = r.json().get("result",{}).get("list",[])
+        if not data:
+            return 0.0
+        return float(data[0].get("fundingRate", 0))
+    except Exception as e:
+        logger.warning(f"Funding rate error {symbol}: {e}")
+        return 0.0
+
+def calculate_indicators(symbol):
+    """Calculate technical indicators for a pair."""
+    try:
+        df = get_bybit_ohlcv(symbol, interval="5", limit=100)
+        if df is None or len(df) < 20:
+            return None
+        close = df["close"]
+        high = df["high"]
+        low = df["low"]
+        volume = df["volume"]
+
+        # EMA
+        ema8 = close.ewm(span=8, adjust=False).mean().iloc[-1]
+        ema20 = close.ewm(span=20, adjust=False).mean().iloc[-1]
+        ema50 = close.ewm(span=50, adjust=False).mean().iloc[-1]
+
+        # RSI
+        delta = close.diff()
+        gain = delta.clip(lower=0).rolling(14).mean()
+        loss = (-delta.clip(upper=0)).rolling(14).mean()
+        rs = gain / loss.replace(0, 0.0001)
+        rsi = (100 - 100/(1+rs)).iloc[-1]
+
+        # ATR
+        tr = (high - low).rolling(14).mean()
+        atr = tr.iloc[-1]
+        atr_pct = (atr / close.iloc[-1]) * 100
+
+        # Volume spike
+        avg_vol = volume.rolling(20).mean().iloc[-1]
+        vol_ratio = volume.iloc[-1] / avg_vol if avg_vol > 0 else 1.0
+
+        # Current price
+        current_price = close.iloc[-1]
+
+        # Direction
+        direction = "LONG" if ema8 > ema20 else "SHORT"
+
+        # Support/Resistance
+        support = low.rolling(20).min().iloc[-1]
+        resistance = high.rolling(20).max().iloc[-1]
+
         return {
-            "trend": trend,
-            "volume_ratio": round(vol_ratio, 2),
-            "atr_pct": round(atr_pct, 2),
-            "support": round(support, 4),
-            "resistance": round(resistance, 4),
-            "current_price": round(current_price, 4),
+            "pair": symbol,
+            "price": current_price,
+            "current_price": current_price,
+            "ema8": ema8, "ema20": ema20, "ema50": ema50,
+            "rsi": rsi, "atr_pct": atr_pct,
+            "vol_ratio": vol_ratio,
+            "volume_ratio": vol_ratio,
+            "trend": "LONG" if ema8 > ema20 else "SHORT",
+            "direction": direction,
+            "support": support,
+            "resistance": resistance,
+            "pct_4h": 0,
         }
     except Exception as e:
-        logger.debug(f"Indicator calc failed for {symbol}: {e}")
-        return {}
+        logger.warning(f"Indicator error {symbol}: {e}")
+        return None
+
+def score_setup(ind, ob_ratio, funding):
+    """Score a trading setup 0-10."""
+    score = 5.0
+
+    # Trend alignment
+    if ind["ema8"] > ind["ema20"] > ind["ema50"]:
+        score += 1.5
+    elif ind["ema8"] < ind["ema20"] < ind["ema50"]:
+        score += 1.5
+
+    # RSI not extreme
+    rsi = ind["rsi"]
+    if 40 <= rsi <= 60:
+        score += 0.5
+    elif rsi > 75 or rsi < 25:
+        score -= 1.0
+
+    # Volume spike
+    if ind["vol_ratio"] > 1.5:
+        score += 1.0
+    elif ind["vol_ratio"] < 0.7:
+        score -= 0.5
+
+    # Order book bias matches direction
+    if ind["direction"] == "LONG" and ob_ratio > 0.55:
+        score += 0.5
+    elif ind["direction"] == "SHORT" and ob_ratio < 0.45:
+        score += 0.5
+
+    # Funding rate
+    if abs(funding) > 0.001:
+        score -= 0.5
+
+    # ATR filter
+    if ind["atr_pct"] < 0.3:
+        score -= 1.0
+
+    return round(min(max(score, 0), 10), 1)
+
+def format_scan_result(ind, score, ob_ratio, funding):
+    """Format scan result for Telegram."""
+    pair_clean = ind["pair"].replace("/USDT:USDT","")
+    direction = ind["direction"]
+    price = ind["price"]
+    rsi = ind["rsi"]
+    atr = ind["atr_pct"]
+    vol = ind["vol_ratio"]
+
+    # SL/TP
+    sl_pct = 0.008
+    tp_pct = sl_pct * 2.5
+    if direction == "LONG":
+        sl = price * (1 - sl_pct)
+        tp = price * (1 + tp_pct)
+    else:
+        sl = price * (1 + sl_pct)
+        tp = price * (1 - tp_pct)
+
+    emoji = "🟢" if direction == "LONG" else "🔴"
+    bar = "█" * int(score) + "░" * (10 - int(score))
+
+    return (
+        f"{emoji} *{pair_clean}* {direction}\n"
+        f"Score: `{score}/10` {bar}\n"
+        f"Price: `${price:,.4f}`\n"
+        f"RSI: `{rsi:.1f}` | ATR: `{atr:.1f}%` | Vol: `{vol:.1f}x`\n"
+        f"SL: `${sl:,.4f}` | TP: `${tp:,.4f}`\n"
+        f"OB Ratio: `{ob_ratio:.2f}` | Funding: `{funding:.4f}`\n"
+    )
+
+
+def get_bybit_top_movers(limit=20):
+    """Fetch top movers by volume from Bybit."""
+    try:
+        r = requests.get(
+            "https://api.bybit.com/v5/market/tickers",
+            params={"category": "linear"},
+            timeout=10
+        )
+        if r.status_code != 200:
+            return ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+        data = r.json().get("result", {}).get("list", [])
+        # Filter: USDT pairs only, price > $1, sort by 24h volume
+        filtered = [
+            t for t in data
+            if t.get("symbol", "").endswith("USDT")
+            and not any(x in t.get("symbol","") for x in ["USDC","DAI","BUSD","TUSD"])
+            and float(t.get("lastPrice", 0)) >= 1.0
+        ]
+        filtered.sort(key=lambda x: float(x.get("turnover24h", 0)), reverse=True)
+        # Convert to freqtrade pair format
+        pairs = []
+        for t in filtered[:limit]:
+            sym = t["symbol"]
+            pair = sym[:-4] + "/USDT:USDT"
+            pairs.append(pair)
+        return pairs if pairs else ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT"]
+    except Exception as e:
+        logger.warning(f"Bybit top movers error: {e}")
+        return ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT"]
 
 
 def call_stepfun_skill(prompt, retries=2):
@@ -1019,11 +1025,31 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None):
     if not candidates:
         logger.warning("No valid candidates after indicator fetch")
         return []
-    # Phase 2: Pre-filter to top 8 by heuristic (abs(pct_4h) * vol_ratio)
+    # Phase 2: Pre-filter - remove unsafe pairs, rank by win potential
+    safe_candidates = []
     for c in candidates:
-        c["heuristic"] = abs(c["pct_4h"]) * c["vol_ratio"]
-    candidates.sort(key=lambda x: x["heuristic"], reverse=True)
-    top_candidates = candidates[:8]
+        # Skip if ATR too low (no movement)
+        if c.get("atr_pct", 0) < 0.3:
+            continue
+        # Skip if volume ratio too low (no interest)
+        if c.get("vol_ratio", 1) < 0.5:
+            continue
+        # Skip if price too low (pump risk)
+        if c.get("current_price", 0) < 1.0:
+            continue
+        # Win potential score: volume + momentum + volatility
+        vol_score = min(c.get("vol_ratio", 1) * 2, 4)
+        momentum_score = min(abs(c.get("pct_4h", 0)) * 0.5, 3)
+        atr_score = min(c.get("atr_pct", 0) * 0.5, 2)
+        trend_score = 1 if c.get("trend") in ["LONG","SHORT"] else 0
+        c["heuristic"] = vol_score + momentum_score + atr_score + trend_score
+        safe_candidates.append(c)
+    
+    if not safe_candidates:
+        safe_candidates = candidates  # fallback
+    
+    safe_candidates.sort(key=lambda x: x["heuristic"], reverse=True)
+    top_candidates = safe_candidates[:8]
     logger.info(f"Selected {len(top_candidates)} candidates for StepFun ranking")
     # Phase 3: Parallel StepFun scoring
     def score_candidate(c):
