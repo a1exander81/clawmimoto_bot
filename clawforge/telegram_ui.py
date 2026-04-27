@@ -1596,6 +1596,29 @@ async def show_gains_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 # ── News & Settings Wrappers ─-
 
+
+async def cooknow_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """CookNow macro scenario simulator — admin only."""
+    q = update.callback_query
+    await q.answer()
+    chat_id = q.message.chat_id
+    if chat_id != 7093901111:
+        await q.answer("Access denied.", show_alert=True)
+        return
+    await q.edit_message_text("CookNow: Firing up the kitchen... Generating macro scenarios...", parse_mode="Markdown")
+    import asyncio, subprocess, sys
+    from pathlib import Path
+    script = Path("/docker/openclaw-0jn0/data/.openclaw/workspace/clawmimoto-bot/scripts/cooknow.py")
+    env = {**__import__("os").environ, "TELEGRAM_CHAT_ID": str(chat_id)}
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, str(script), str(chat_id), "admin",
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+        env=env
+    )
+    asyncio.create_task(proc.wait())
+    # Return to trade menu
+    await main_cb(update, ctx)
+
 async def toggle_macro_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Toggle MACRO Sentinel mode ON/OFF."""
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
@@ -4118,6 +4141,7 @@ def main():
     app.add_handler(CallbackQueryHandler(show_gains_cb, pattern="^show_gains$"))
     app.add_handler(CallbackQueryHandler(show_news_cb, pattern="^show_news$"))
     app.add_handler(CallbackQueryHandler(toggle_macro_cb, pattern="^toggle_macro$"))
+    app.add_handler(CallbackQueryHandler(cooknow_cb, pattern="^cooknow$"))
     app.add_handler(CallbackQueryHandler(settings_cb, pattern="^settings$"))
     app.add_handler(CallbackQueryHandler(settings_tab_cb, pattern="^settings_tab_(manual|session)$"))
     app.add_handler(CallbackQueryHandler(toggle_sutamm_cb, pattern="^toggle_sutamm$"))
