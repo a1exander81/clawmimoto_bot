@@ -677,25 +677,39 @@ def get_open_trades_count() -> int:
 
 
 def get_stats():
-    s = api_get("/api/v1/profit") or {}
-    wins = s.get("winning_trades", 0)
-    losses = s.get("losing_trades", 0)
-    total = wins + losses
-    win_rate = (wins / total * 100) if total > 0 else 0
-    realized_pnl = s.get("profit_all_coin", 0)
-    return wins, losses, win_rate, realized_pnl
+    """Fetch stats from Supabase for accuracy across all sessions."""
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/rest/v1/trades",
+            params={"is_open": "eq.false", "select": "profit_ratio,profit_abs"},
+            headers={"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {SUPABASE_ANON_KEY}"},
+            timeout=5
+        )
+        trades = r.json() if r.status_code == 200 else []
+        wins = sum(1 for t in trades if (t.get("profit_ratio") or 0) > 0)
+        losses = sum(1 for t in trades if (t.get("profit_ratio") or 0) <= 0)
+        total = wins + losses
+        win_rate = (wins / total * 100) if total > 0 else 0
+        pnl_abs = sum((t.get("profit_abs") or 0) for t in trades)
+        pnl_pct = sum((t.get("profit_ratio") or 0) for t in trades) * 100
+        return wins, losses, win_rate, pnl_abs, pnl_pct
+    except Exception:
+        s = api_get("/api/v1/profit") or {}
+        wins = s.get("winning_trades", 0)
+        losses = s.get("losing_trades", 0)
+        total = wins + losses
+        win_rate = (wins / total * 100) if total > 0 else 0
+        return wins, losses, win_rate, s.get("profit_all_coin", 0), s.get("profit_all_percent", 0)
 
 def format_wins():
-    w, l, wr, _ = get_stats()
-    return f"{w}/{l} ({wr:.0f}%)"
+    w, l, wr, _, __ = get_stats()
+    return f"{w}/{w+l} ({wr:.0f}%)"
 
 def format_gains():
-    s = api_get("/api/v1/profit") or {}
-    pnl_pct = s.get("profit_all_percent", 0) or 0
-    pnl_abs = s.get("profit_all_coin", 0) or 0
-    return f"{pnl_pct:+.2f}% (${pnl_abs:,.2f})"
+    _, __, ___, pnl_abs, pnl_pct = get_stats()
+    sign = "+" if pnl_pct >= 0 else ""
+    return f"{sign}{pnl_pct:.2f}% (${pnl_abs:+,.2f})"
 
-# ── AI Scan ──
 def get_bybit_ohlcv(symbol, interval="5", limit=100):
     """Fetch OHLCV candles from Bybit."""
     try:
@@ -1601,43 +1615,148 @@ async def settings_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     chat_id = q.message.chat_id
     state = get_state(chat_id)
+    tab = state.get("settings_tab", "manual")
+    await _render_settings(q, chat_id, state, tab)
+
+async def _render_settings(q, chat_id, state, tab="manual"):
     trade_mode = state.get("trade_mode", "MOCK")
-    trading_mode = state.get("trading_mode", "manual")
     leverage = state.get("leverage", 20)
-    margin = state.get("margin", 5)
+    margin = state.get("margin", 2.0)
+    sutamm = state.get("sutamm", False)
+    sl_pct = state.get("sl_pct", 0.8)
+    tp_pct = state.get("tp_pct", 2.0)
+    session_lev = state.get("session_leverage", 20)
+    session_margin = state.get("session_margin", 2.0)
     mock_icon = "✅" if trade_mode == "MOCK" else "⬜"
     real_icon = "✅" if trade_mode == "REAL" else "⬜"
-    manual_icon = "✅" if trading_mode == "manual" else "⬜"
-    session_icon = "✅" if trading_mode == "session" else "⬜"
+    manual_tab = "🔵 MANUAL" if tab == "manual" else "MANUAL"
+    session_tab = "🔵 SESSION" if tab == "session" else "SESSION"
+    sutamm_icon = "🟢 ON" if sutamm else "🔴 OFF"
 
-    text = (
-        "⚙️ *SETTINGS*\n\n"
-        "━━━━━━━━━━━━━━━━━━━━\n"
-        "*Trade Mode*\n"
-        f"  {mock_icon} MOCK (dry run)\n"
-        f"  {real_icon} REAL (live)\n\n"
-        "*Trading Mode*\n"
-        f"  {manual_icon} MANUAL (you pick)\n"
-        f"  {session_icon} SESSION (auto)\n\n"
-        "*Risk*\n"
-        f"  ⚡ Leverage: {leverage}x\n"
-        f"  🎯 Margin: {margin}%\n"
-        "━━━━━━━━━━━━━━━━━━━━"
-    )
-    kb = [
-        [InlineKeyboardButton(f"{mock_icon} MOCK", callback_data="set_mock"),
-         InlineKeyboardButton(f"{real_icon} REAL", callback_data="set_real")],
-        [InlineKeyboardButton(f"{manual_icon} MANUAL", callback_data="set_manual"),
-         InlineKeyboardButton(f"{session_icon} SESSION", callback_data="set_session")],
-        [InlineKeyboardButton("➖ Leverage", callback_data="lev_down"),
-         InlineKeyboardButton(f"⚡ {leverage}x", callback_data="noop"),
-         InlineKeyboardButton("➕ Leverage", callback_data="lev_up")],
-        [InlineKeyboardButton("➖ Margin", callback_data="mar_down"),
-         InlineKeyboardButton(f"🎯 {margin}%", callback_data="noop"),
-         InlineKeyboardButton("➕ Margin", callback_data="mar_up")],
-        [InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")],
-    ]
+    if tab == "manual":
+        text = (
+            "⚙️ *SETTINGS - MANUAL TRADE*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*Trade Mode*\n"
+            f"  {mock_icon} MOCK (dry run)   {real_icon} REAL (live)\n\n"
+            "*Risk Controls*\n"
+            f"  ⚡ Leverage: `{leverage}x`\n"
+            f"  🎯 Margin: `{margin:.1f}%`\n"
+            f"  🛑 Stop Loss: `{sl_pct:.1f}%`\n"
+            f"  ✅ Take Profit: `{tp_pct:.1f}%`\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ _Changing values above recommended increases risk._"
+        )
+        kb = [
+            [InlineKeyboardButton("📋 " + manual_tab, callback_data="settings_tab_manual"),
+             InlineKeyboardButton("🤖 " + session_tab, callback_data="settings_tab_session")],
+            [InlineKeyboardButton(mock_icon + " MOCK", callback_data="set_mock"),
+             InlineKeyboardButton(real_icon + " REAL", callback_data="set_real")],
+            [InlineKeyboardButton("➖", callback_data="lev_down"),
+             InlineKeyboardButton("⚡ " + str(leverage) + "x", callback_data="noop"),
+             InlineKeyboardButton("➕", callback_data="lev_up")],
+            [InlineKeyboardButton("➖", callback_data="mar_down"),
+             InlineKeyboardButton("🎯 " + str(margin) + "%", callback_data="noop"),
+             InlineKeyboardButton("➕", callback_data="mar_up")],
+            [InlineKeyboardButton("➖ SL", callback_data="sl_down"),
+             InlineKeyboardButton("🛑 " + str(sl_pct) + "%", callback_data="noop"),
+             InlineKeyboardButton("➕ SL", callback_data="sl_up")],
+            [InlineKeyboardButton("➖ TP", callback_data="tp_down"),
+             InlineKeyboardButton("✅ " + str(tp_pct) + "%", callback_data="noop"),
+             InlineKeyboardButton("➕ TP", callback_data="tp_up")],
+            [InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")],
+        ]
+    else:
+        text = (
+            "⚙️ *SETTINGS - SESSION TRADE*\n"
+            "━━━━━━━━━━━━━━━━━━━━\n\n"
+            "*SUTAMM - Shut Up and Take My Money*\n"
+            f"  Auto-execute session trades: *{sutamm_icon}*\n"
+            "  _When ON: trades execute automatically_\n"
+            "  _without your approval_\n\n"
+            "*Session Risk Controls*\n"
+            f"  ⚡ Leverage: `{session_lev}x` _(recommended: 20x)_\n"
+            f"  🎯 Margin: `{session_margin:.1f}%` _(recommended: 2%)_\n\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            "⚠️ _SUTAMM executes trades automatically._\n"
+            "_Only enable if you trust the strategy._"
+        )
+        kb = [
+            [InlineKeyboardButton("📋 " + manual_tab, callback_data="settings_tab_manual"),
+             InlineKeyboardButton("🤖 " + session_tab, callback_data="settings_tab_session")],
+            [InlineKeyboardButton("🔄 SUTAMM: " + sutamm_icon, callback_data="toggle_sutamm")],
+            [InlineKeyboardButton("➖", callback_data="sess_lev_down"),
+             InlineKeyboardButton("⚡ " + str(session_lev) + "x", callback_data="noop"),
+             InlineKeyboardButton("➕", callback_data="sess_lev_up")],
+            [InlineKeyboardButton("➖", callback_data="sess_mar_down"),
+             InlineKeyboardButton("🎯 " + str(session_margin) + "%", callback_data="noop"),
+             InlineKeyboardButton("➕", callback_data="sess_mar_up")],
+            [InlineKeyboardButton("♻️ Reset to Safe Defaults", callback_data="session_defaults")],
+            [InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")],
+        ]
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def settings_tab_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    chat_id = q.message.chat_id
+    state = get_state(chat_id)
+    tab = "session" if "session" in q.data else "manual"
+    state["settings_tab"] = tab
+    await _render_settings(q, chat_id, state, tab)
+
+async def toggle_sutamm_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    chat_id = q.message.chat_id
+    state = get_state(chat_id)
+    current = state.get("sutamm", False)
+    if not current:
+        await q.answer("⚠️ SUTAMM enabled! Trades will execute automatically.", show_alert=True)
+    else:
+        await q.answer("SUTAMM disabled. Manual approval required.", show_alert=False)
+    state["sutamm"] = not current
+    await _render_settings(q, chat_id, state, "session")
+
+async def session_defaults_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    chat_id = q.message.chat_id
+    state = get_state(chat_id)
+    state["session_leverage"] = 20
+    state["session_margin"] = 2.0
+    state["sutamm"] = False
+    await q.answer("✅ Reset to safe defaults", show_alert=False)
+    await _render_settings(q, chat_id, state, "session")
+
+async def sl_tp_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    chat_id = q.message.chat_id
+    state = get_state(chat_id)
+    action = q.data
+    if action == "sl_up":
+        state["sl_pct"] = round(min(state.get("sl_pct", 0.8) + 0.1, 3.0), 1)
+    elif action == "sl_down":
+        state["sl_pct"] = round(max(state.get("sl_pct", 0.8) - 0.1, 0.3), 1)
+    elif action == "tp_up":
+        state["tp_pct"] = round(min(state.get("tp_pct", 2.0) + 0.1, 10.0), 1)
+    elif action == "tp_down":
+        state["tp_pct"] = round(max(state.get("tp_pct", 2.0) - 0.1, 0.5), 1)
+    elif action == "sess_lev_up":
+        new_lev = state.get("session_leverage", 20) + 5
+        if new_lev > 20:
+            await q.answer("⚠️ Above 20x increases liquidation risk significantly!", show_alert=True)
+        state["session_leverage"] = min(new_lev, 50)
+    elif action == "sess_lev_down":
+        state["session_leverage"] = max(state.get("session_leverage", 20) - 5, 5)
+    elif action == "sess_mar_up":
+        new_mar = round(state.get("session_margin", 2.0) + 0.5, 1)
+        if new_mar > 5.0:
+            await q.answer("⚠️ High margin % means larger position size - higher risk!", show_alert=True)
+        state["session_margin"] = min(new_mar, 20.0)
+    elif action == "sess_mar_down":
+        state["session_margin"] = round(max(state.get("session_margin", 2.0) - 0.5, 0.5), 1)
+    tab = state.get("settings_tab", "manual")
+    await _render_settings(q, chat_id, state, tab)
 
 
 # ── Market Now ──
@@ -3929,6 +4048,10 @@ def main():
     app.add_handler(CallbackQueryHandler(show_gains_cb, pattern="^show_gains$"))
     app.add_handler(CallbackQueryHandler(show_news_cb, pattern="^show_news$"))
     app.add_handler(CallbackQueryHandler(settings_cb, pattern="^settings$"))
+    app.add_handler(CallbackQueryHandler(settings_tab_cb, pattern="^settings_tab_(manual|session)$"))
+    app.add_handler(CallbackQueryHandler(toggle_sutamm_cb, pattern="^toggle_sutamm$"))
+    app.add_handler(CallbackQueryHandler(session_defaults_cb, pattern="^session_defaults$"))
+    app.add_handler(CallbackQueryHandler(sl_tp_cb, pattern="^(sl_up|sl_down|tp_up|tp_down|sess_lev_up|sess_lev_down|sess_mar_up|sess_mar_down)$"))
     app.add_handler(CallbackQueryHandler(set_trade_mode_cb, pattern="^set_mock$"))
     app.add_handler(CallbackQueryHandler(set_trade_mode_cb, pattern="^set_real$"))
     app.add_handler(CallbackQueryHandler(set_trade_mode_cb, pattern="^set_manual$"))
