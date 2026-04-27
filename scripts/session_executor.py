@@ -19,8 +19,8 @@ from pathlib import Path
 
 # ── Freqtrade API config (matches telegram_ui.py) ──
 FREQTRADE_API_URL = os.getenv("FREQTRADE_API_URL", "http://127.0.0.1:8080")
-FREQTRADE_API_USER = os.getenv("FREQTRADE_API_USER", "admin")
-FREQTRADE_API_PASS = os.getenv("FREQTRADE_API_PASS", "admin")
+FREQTRADE_API_USER = os.getenv("FREQTRADE_API_USER", "clawforge")
+FREQTRADE_API_PASS = os.getenv("FREQTRADE_API_PASS", "CiRb7PvcBwsVVs7XnKvw")
 AUTH_HEADER = {
     "Authorization": f"Basic {base64.b64encode(f'{FREQTRADE_API_USER}:{FREQTRADE_API_PASS}'.encode()).decode()}"
 }
