@@ -70,12 +70,20 @@ def execute_trade(pair: str, direction: str, entry: float, sl: float, tp: float,
     """Execute trade via Freqtrade forcebuy."""
     # Convert to Freqtrade futures pair format: ETH/USDT → ETH/USDT:USDT
     exchange_pair = pair if ":USDT" in pair else f"{pair}:USDT"
+    # Calculate stake from margin_pct
+    try:
+        bal = api_get("/api/v1/balance") or {}
+        total = bal.get("total", 1000)
+        stake = round(total * (margin_pct / 100), 2)
+        stake = max(stake, 10)  # minimum $10
+    except Exception:
+        stake = 10
     payload = {
         "pair": exchange_pair,
         "price": entry,
         "direction": direction.lower(),
-        "stake_amount": None,
-        "leverage": 50,
+        "stake_amount": stake,
+        "leverage": 20,
     }
     success, resp = api_post("/api/v1/forcebuy", payload)
     if success:
@@ -97,7 +105,7 @@ def send_trade_to_channel(pair, direction, entry, sl, tp, margin_pct, trade_id):
         f"Pair: {pair} {direction}\n"
         f"Entry: ${entry:,.4f} (limit)\n"
         f"SL: ${sl:,.4f}  |  TP: ${tp:,.4f}\n"
-        f"Margin: {margin_pct}%  |  Leverage: 50x\n"
+        f"Margin: {margin_pct}%  |  Leverage: 20x\n"
         f"Mode: SESSION-AUTO\n"
         f"Trade ID: {trade_id}"
     )
