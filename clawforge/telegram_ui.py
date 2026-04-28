@@ -1648,11 +1648,11 @@ async def toggle_macro_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
         return
     q = update.callback_query
-    await q.answer()
     chat_id = q.message.chat_id
     state = get_state(chat_id)
     macro_on = not state.get("macro_on", False)
     state["macro_on"] = macro_on
+    _save_state()
 
     if macro_on:
         await q.answer("🧠 MACRO ON — Sentinel running in background", show_alert=True)
@@ -4104,9 +4104,7 @@ async def history_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         trades = await asyncio.get_event_loop().run_in_executor(None, _fetch_history)
         if not trades:
             await q.edit_message_text(
-                "📋 *TRADE HISTORY*
-
-No closed trades yet.",
+                "📋 *TRADE HISTORY*\n\nNo closed trades yet.",
                 reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")]]),
                 parse_mode="Markdown"
             )
@@ -4150,9 +4148,7 @@ No closed trades yet.",
         kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")])
     except Exception as e:
         logger.error(f"History fetch error: {e}")
-        text = "📋 *TRADE HISTORY*
-
-Failed to load. Try again."
+        text = "📋 *TRADE HISTORY*\n\nFailed to load. Try again."
         kb = [[InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")]]
     await q.edit_message_text(
         text,
