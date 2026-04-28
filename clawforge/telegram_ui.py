@@ -261,7 +261,30 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # ── State ──
-user_state = {}  # {chat_id: {"leverage": 50, "margin": 1, "trade_mode": "MOCK", "selected_pair": None}}
+STATE_FILE = "/app/data/user_state.json"
+
+def _load_state():
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        p = _Path(STATE_FILE)
+        if p.exists():
+            raw = _json.loads(p.read_text())
+            return {int(k): v for k, v in raw.items()}
+    except Exception:
+        pass
+    return {}
+
+def _save_state():
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        _Path(STATE_FILE).parent.mkdir(parents=True, exist_ok=True)
+        _Path(STATE_FILE).write_text(_json.dumps({str(k): v for k, v in user_state.items()}))
+    except Exception as e:
+        pass
+
+user_state = _load_state()
 
 def get_state(chat_id):
     """Get or initialize user state with all required keys."""
@@ -1461,7 +1484,8 @@ async def toggle_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = q.message.chat_id
     state = get_state(chat_id)
     state["trade_mode"] = "REAL" if state["trade_mode"] == "MOCK" else "MOCK"
-    await main_cb(update, ctx)
+    _save_state()
+    await trade_menu_cb(update, ctx)
 
 
 async def set_trade_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1516,7 +1540,7 @@ async def toggle_trading_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     state["trading_mode"] = "session" if current == "manual" else "manual"
     new_mode = state["trading_mode"]
     await q.answer(f"Switched to {new_mode.upper()} mode", show_alert=True)
-    await main_cb(update, ctx)
+    await trade_menu_cb(update, ctx)
 
 async def show_balance_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
@@ -1617,7 +1641,7 @@ async def cooknow_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     )
     asyncio.create_task(proc.wait())
     # Return to trade menu
-    await main_cb(update, ctx)
+    await trade_menu_cb(update, ctx)
 
 async def toggle_macro_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     """Toggle MACRO Sentinel mode ON/OFF."""
@@ -1647,7 +1671,7 @@ async def toggle_macro_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.answer("🔴 MACRO OFF — Normal mode active", show_alert=True)
 
     # Refresh full trade menu
-    await main_cb(update, ctx)
+    await trade_menu_cb(update, ctx)
 
 async def show_news_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
@@ -1769,6 +1793,7 @@ async def toggle_sutamm_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     else:
         await q.answer("SUTAMM disabled. Manual approval required.", show_alert=False)
     state["sutamm"] = not current
+    _save_state()
     await _render_settings(q, chat_id, state, "session")
 
 async def session_defaults_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2217,11 +2242,12 @@ async def trade_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("📈 POSITIONS", callback_data="positions"),
          InlineKeyboardButton("📋 HISTORY", callback_data="history")],
         [InlineKeyboardButton("🟢 MACRO ON" if state.get("macro_on") else "🔴 MACRO OFF", callback_data="toggle_macro"),
-         InlineKeyboardButton("📡 SOCIALS", callback_data="socials")],
+         InlineKeyboardButton("🤖 SUTAMM ON" if state.get("sutamm") else "💤 SUTAMM OFF", callback_data="toggle_sutamm")],
+        [InlineKeyboardButton("📡 SOCIALS", callback_data="socials"),
+         InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings")],
         [InlineKeyboardButton("🤖 SESSION MODE", callback_data="session_mode"),
          InlineKeyboardButton("🎯 MANUAL MODE", callback_data="manual_mode")],
-        [InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings"),
-         InlineKeyboardButton("📊 STATS", callback_data="show_stats")],
+        [InlineKeyboardButton("📊 STATS", callback_data="show_stats")],
     ]
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
