@@ -4113,10 +4113,8 @@ async def history_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         total_pnl = sum((t.get("profit_ratio") or 0) * 100 for t in trades)
         sign = "+" if total_pnl >= 0 else ""
         text = (
-            "📋 *TRADE HISTORY* — Last 10
-"
-            "━━━━━━━━━━━━━━━━━━━━
-"
+            "📋 *TRADE HISTORY* — Last 10\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
             f"{wins}W / {len(trades) - wins}L  |  {sign}{total_pnl:.2f}%\n"
             f"[📊 Open Full Dashboard]({DASHBOARD})"
         )
