@@ -4089,8 +4089,8 @@ async def history_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     q = update.callback_query
     await q.answer()
+    DASHBOARD = "https://clawmimoto-backtests.vercel.app"
     try:
-        import asyncio
         def _fetch_history():
             import requests as _req
             r = _req.get(
@@ -4103,34 +4103,63 @@ async def history_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             return r.json()
         trades = await asyncio.get_event_loop().run_in_executor(None, _fetch_history)
         if not trades:
-            text = "📋 *TRADE HISTORY*\n\nNo closed trades yet."
-        else:
-            lines = ["📋 *TRADE HISTORY*", "━━━━━━━━━━━━━━━━━━━━", ""]
-            for t in trades:
-                raw_pair = t.get("pair") or ""
-                pair = raw_pair.split("/", 1)[0] if "/" in raw_pair else raw_pair
-                direction = t.get("direction") or "LONG"
-                profit_pct = (t.get("profit_ratio") or 0) * 100
-                profit_abs = t.get("profit_abs") or 0
-                exit_reason = (t.get("exit_reason") or "").replace("_", " ")
-                close_date = (t.get("close_date") or "")[:16].replace("T", " ")
-                leverage = t.get("leverage") or 20
-                icon = "✅" if profit_pct > 0 else "❌"
-                sign = "+" if profit_pct > 0 else ""
-                lines.append(
-                    f"{icon} *{pair}* {direction} `{leverage}x`\n"
-                    f"   P&L: `{sign}{profit_pct:.2f}%` · ${sign}{profit_abs:.2f}\n"
-                    f"   Exit: `{exit_reason}`\n"
-                    f"   📅 `{close_date}`\n"
-                )
-            lines.append("━━━━━━━━━━━━━━━━━━━━")
-            text = "\n".join(lines)
+            await q.edit_message_text(
+                "📋 *TRADE HISTORY*
+
+No closed trades yet.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")]]),
+                parse_mode="Markdown"
+            )
+            return
+        wins = sum(1 for t in trades if (t.get("profit_ratio") or 0) > 0)
+        total_pnl = sum((t.get("profit_ratio") or 0) * 100 for t in trades)
+        sign = "+" if total_pnl >= 0 else ""
+        text = (
+            "📋 *TRADE HISTORY* — Last 10
+"
+            "━━━━━━━━━━━━━━━━━━━━
+"
+            f"{wins}W / {len(trades) - wins}L  |  {sign}{total_pnl:.2f}%
+"
+            f"[📊 Open Full Dashboard]({DASHBOARD})"
+        )
+        kb = []
+        row = []
+        for t in trades:
+            raw_pair = t.get("pair") or ""
+            pair = raw_pair.split("/", 1)[0] if "/" in raw_pair else raw_pair
+            profit_pct = (t.get("profit_ratio") or 0) * 100
+            close_raw = t.get("close_date") or ""
+            try:
+                dt = datetime.fromisoformat(close_raw.replace("Z", "+00:00"))
+                date_label = dt.strftime("%b%d")
+            except Exception:
+                date_label = close_raw[:5] if close_raw else "?"
+            icon = "✅" if profit_pct > 0 else "❌"
+            sign_p = "+" if profit_pct >= 0 else ""
+            label = f"{icon} {pair} {date_label} {sign_p}{profit_pct:.1f}%"
+            trade_id = t.get("trade_id") or t.get("id") or ""
+            url = f"{DASHBOARD}/?trade_id={trade_id}" if trade_id else DASHBOARD
+            row.append(InlineKeyboardButton(label, url=url))
+            if len(row) == 2:
+                kb.append(row)
+                row = []
+        if row:
+            kb.append(row)
+        kb.append([InlineKeyboardButton("📊 Dashboard", url=DASHBOARD)])
+        kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")])
     except Exception as e:
         logger.error(f"History fetch error: {e}")
-        text = "📋 *TRADE HISTORY*\n\nFailed to load. Try again."
-    kb = [[InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")]]
-    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+        text = "📋 *TRADE HISTORY*
 
+Failed to load. Try again."
+        kb = [[InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")]]
+    await q.edit_message_text(
+        text,
+        reply_markup=InlineKeyboardMarkup(kb),
+        parse_mode="Markdown",
+        disable_web_page_preview=True
+    )
 
 def main():
     if not TOKEN:
