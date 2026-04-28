@@ -4117,8 +4117,7 @@ async def history_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 "
             "━━━━━━━━━━━━━━━━━━━━
 "
-            f"{wins}W / {len(trades) - wins}L  |  {sign}{total_pnl:.2f}%
-"
+            f"{wins}W / {len(trades) - wins}L  |  {sign}{total_pnl:.2f}%\n"
             f"[📊 Open Full Dashboard]({DASHBOARD})"
         )
         kb = []
