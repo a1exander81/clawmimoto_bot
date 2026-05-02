@@ -27,6 +27,8 @@ from telegram.error import BadRequest, TelegramError
 import psutil
 import subprocess
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
+from grid_layer.process_manager import start_grid_bot, stop_grid_bot, get_active_grid_bots
+from clawforge.integrations.stepfun import analyze_sentiment
 
 # ── Utility: async message deletion ──
 async def delete_after_delay(bot, chat_id: int, msg_id: int, delay: int = 300):
