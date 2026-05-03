@@ -30,6 +30,8 @@ dependencies = [
     "sqlalchemy>=2.0.0",
     "requests>=2.32.4",
     "aiohttp>=3.9.0",
+    "feedparser>=6.0.0",
+    "psutil>=5.0.0",
 ]
 
 [project.optional-dependencies]
@@ -45,7 +47,7 @@ dev = [
 ]
 
 [tool.setuptools]
-packages = ["clawforge"]
+packages = ["clawforge", "grid_layer", "config", "strategies", "unified_ui"]
 
 [tool.black]
 line-length = 100
