@@ -18,10 +18,10 @@ Add these secrets in your GitHub repository Settings â†’ Secrets and variables â
 - **Type:** Plain text
 - **What:** SSH user (usually `root` or `ubuntu`)
 
-### `STEPFUN_API_KEY`
+### `DEEPSEEK_API_KEY`
 - **Type:** Plain text
-- **What:** StepFun API key for LLM sentiment analysis
-- **From:** https://platform.stepfun.com/
+- **What:** DeepSeek API key for LLM sentiment analysis
+- **From:** https://platform.deepseek.com/
 
 ### `BINGX_API_KEY` (optional for CI tests)
 - **Type:** Plain text

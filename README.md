@@ -3,7 +3,6 @@
 > **ClawForge Trading Platform** — AI-powered crypto scalping bot on Bybit Perpetuals  
 > Built on OpenClaw Foundation · Watched by Clawtcher · Managed via Telegram
 
----
 
 ## 🏗️ Architecture
 

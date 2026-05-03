@@ -76,7 +76,7 @@ class Claw5MSniper(IStrategy):
         buy_cond = cond_rsi & cond_macd & cond_ema & cond_session
 
         if self.use_sentiment.value:
-            from clawforge.integrations.stepfun import get_sentiment_score
+            from clawforge.integrations.deepseek import get_sentiment_score
             sentiment = get_sentiment_score(metadata["pair"])
             if sentiment < self.sentiment_threshold.value:
                 buy_cond = False

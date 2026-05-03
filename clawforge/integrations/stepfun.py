@@ -8,7 +8,7 @@ from openai import OpenAI
 logger = logging.getLogger(__name__)
 
 DEEPSEEK_KEY = os.getenv("DEEPSEEK_API_KEY")
-DEEPSEEK_BASE = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/v1")
+DEEPSEEK_BASE = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 
 client = OpenAI(api_key=DEEPSEEK_KEY, base_url=DEEPSEEK_BASE)
 
@@ -23,7 +23,7 @@ def analyze_sentiment(pair: str) -> dict:
 
     try:
         response = client.chat.completions.create(
-            model="deepseek-chat",
+            model=os.getenv("DEEPSEEK_MODEL", "deepseek-v4-pro"),
             messages=[
                 {"role": "system", "content": "You are a crypto market analyst. Respond in JSON only."},
                 {"role": "user", "content": (

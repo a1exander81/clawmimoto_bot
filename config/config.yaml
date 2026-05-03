@@ -30,7 +30,7 @@ trading:
   scalping_note: "Avoid 11:00–13:00 SGT (LSE mid‑day trap) and 16:00–18:00 SGT (NYSE midday lull). Focus on opening rush windows."
 
 ai:
-  model: stepfun/step-3.5-flash
+  model: deepseek-v4-pro
   confidence_threshold: 65
   min_rrr: 1.5
   # StepFun TA skill reference: https://github.com/BingX-API/api-ai-skills

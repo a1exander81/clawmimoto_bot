@@ -13,6 +13,7 @@ import hashlib
 import hmac
 import requests
 import asyncio
+import random
 import time
 import threading
 import json
@@ -28,7 +29,10 @@ import psutil
 import subprocess
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters
 from grid_layer.process_manager import start_grid_bot, stop_grid_bot, get_active_grid_bots
-from clawforge.integrations.stepfun import analyze_sentiment
+from clawforge.integrations.deepseek import analyze_sentiment
+from clawforge.liquidity_gate import is_market_tradable, get_claw_params, get_grid_params
+from config.sessions import get_market_state
+from clawforge.mock_engine import MockEngine
 
 # ── Utility: async message deletion ──
 async def delete_after_delay(bot, chat_id: int, msg_id: int, delay: int = 300):
@@ -38,25 +42,6 @@ async def delete_after_delay(bot, chat_id: int, msg_id: int, delay: int = 300):
         await bot.delete_message(chat_id=chat_id, message_id=msg_id)
     except Exception:
         pass
-
-# ── Trading Trivia Facts ──
-TRADING_FACTS = [
-    "📜 **Fact:** The first recorded stock exchange was in Amsterdam, 1602 - the Dutch East India Company.",
-    "🔥 **Fact:** On Black Monday (1987), the Dow dropped 22% in a single day - still the biggest one-day % drop.",
-    "🐋 **Fact:** About 90% of retail traders lose money. The 10% who win treat it like a business, not a casino.",
-    "⏰ **Fact:** The NYSE opens at 9:30 AM ET - that's when the smart money moves. The last 30 mins are often the wildest.",
-    "💡 **Fact:** Most pros use 1-2% risk per trade. If you risk more, you're gambling, not trading.",
-    "🌊 **Fact:** Crypto never sleeps - 24/7/365. That's why sleep management is a real edge for degens.",
-    "🎯 **Fact:** The '2% rule' (never risk more than 2% per trade) has saved more accounts than any indicator.",
-    "📈 **Fact:** The 'Greater Fool Theory' describes most crypto pumps: someone's always the greater fool.",
-    "⚡ **Fact:** The average lifespan of a crypto token is 9 months. 99% of altcoins go to zero.",
-    "🏦 **Fact:** In 2023, Binance processed $14 trillion in trading volume - more than the GDP of China.",
-    "🧠 **Fact:** Trading is 80% psychology. Your brain is your biggest enemy - FOMO, FUD, revenge trading.",
-    "📊 **Fact:** The 'Golden Cross' (50 MA > 200 MA) is a classic bull signal - but it's often a late indicator.",
-    "💸 **Fact:** The 'Fed Put' isn't real - but markets believe in it. When the Fed steps in, everything rallies.",
-    "🔢 **Fact:** The '80-20 rule' applies: 80% of your gains come from 20% of your trades. Quality > quantity.",
-    "🛡️ **Fact:** 'Not your keys, not your coins' - but also, 'Not your keys, no trading.' Exchanges are banks now."
-]
 
 # ── Trading Trivia Facts ──
 TRADING_FACTS = [
@@ -158,13 +143,11 @@ if ENV_PATH.exists():
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "7093901111")
-API_URL = os.getenv("FREQTRADE_API_URL", "http://172.19.0.2:8080")
+API_URL = os.getenv("FREQTRADE_API_URL", "http://localhost:8080")
 API_USER = os.getenv("FREQTRADE_API_USER", "clawforge")
 API_PASS = os.getenv("FREQTRADE_API_PASS", "CiRb7PvcBwsVVs7XnKvw")
 BINGX_API_KEY = os.getenv("BINGX_API_KEY")
 BINGX_API_SECRET = os.getenv("BINGX_API_SECRET")
-BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
-BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
@@ -373,25 +356,6 @@ def bybit_signed_request(method: str, endpoint: str, params: dict = None, body: 
         return None
 
 
-def get_bybit_ticker_price(symbol: str) -> float | None:
-    """Fetch latest price from Bybit ticker. symbol format: BTC/USDT."""
-    try:
-        bybit_symbol = symbol.replace("/", "").upper()
-        data = bybit_signed_request(
-            "GET", "/v5/market/tickers",
-            params={"category": "linear", "symbol": bybit_symbol},
-            timeout=5
-        )
-        if data and data.get("retCode") == 0:
-            item = data.get("result", {}).get("list", [{}])[0]
-            price = float(item.get("lastPrice", 0))
-            if price > 0:
-                return price
-    except Exception as e:
-        logger.debug(f"Bybit ticker price error for {symbol}: {e}")
-    return None
-
-
 def get_bybit_hot_pairs(limit: int = 5) -> list:
     """Fetch top volatile USDT perpetual pairs from Bybit ticker."""
     try:
@@ -510,9 +474,13 @@ def analyze_pair(pair):
 def enrich_trade_params(pair_result, chat_id):
     """Add concrete trade parameters (entry, sl, tp, rrr, sizing) based on user state, balance, and session-aware risk levels."""
     state = get_state(chat_id)
-    real, mock = get_balance()
     mode = state.get("trade_mode", "MOCK")
-    wallet = mock if mode == "MOCK" else (real or 0)
+    if mode == "MOCK":
+        engine = MockEngine(chat_id)
+        wallet = engine.get_balance()
+    else:
+        real, _ = get_balance()
+        wallet = real or 0
     leverage = state.get("leverage", 28) or 28  # default 28 if not set
     margin_pct = state.get("margin", 1.0)
     direction = pair_result.get("direction", "LONG")
@@ -618,6 +586,43 @@ def is_pair_valid_for_user(pair: str, user_id: int) -> bool:
         return True
     return is_pair_valid_on_bybit(pair)
 
+def get_coingecko_ticker(cg_id: str):
+    """Fetch ticker from CoinGecko public API. cg_id e.g. 'bitcoin'."""
+    try:
+        r = requests.get(
+            "https://api.coingecko.com/api/v3/simple/price",
+            params={"ids": cg_id, "vs_currencies": "usd", "include_24hr_change": "true"},
+            timeout=10,
+        )
+        if r.status_code == 200:
+            d = r.json().get(cg_id, {})
+            price = d.get("usd", 0)
+            change = d.get("usd_24h_change", 0)
+            if price:
+                return price, change
+    except Exception as e:
+        logger.debug(f"CoinGecko ticker error for {cg_id}: {e}")
+    return None, None
+
+def send_telegram(text: str, chat_id: str = None) -> bool:
+    """Send a plain text message to a Telegram chat via bot API."""
+    token = TOKEN
+    target = chat_id or os.getenv("RIGHTCLAW_CHANNEL", "@RightclawTrade")
+    if not token:
+        logger.error("TELEGRAM_BOT_TOKEN not set, cannot send")
+        return False
+    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    payload = {"chat_id": target, "text": text, "parse_mode": "Markdown", "disable_web_page_preview": True}
+    try:
+        r = requests.post(url, json=payload, timeout=10)
+        if r.status_code == 200:
+            logger.info(f"send_telegram sent to {target}")
+            return True
+        logger.warning(f"send_telegram failed: {r.status_code} {r.text[:100]}")
+    except Exception as e:
+        logger.error(f"send_telegram error: {e}")
+    return False
+
 def get_okx_ticker(symbol):
     """Fetch ticker from OKX public API (no auth). Symbol format: BTC-USDT."""
     try:
@@ -660,20 +665,28 @@ def get_balance():
         mock = 10000.0
     return (real, mock)
 
-def format_balance(real, mock, mode):
-    """BalRealMoc: display balance based on current mode"""
+def format_balance(real, mock, mode, chat_id=None):
+    """BalRealMoc: display balance based on current mode.
+    For MOCK mode uses MockEngine for real CLUSDT balance from Supabase."""
     if mode == "REAL":
         return f"${real:.3f} USDT" if real is not None else "Real: N/A"
     else:
-        return f"{mock:.0f} CLUSDT"
+        engine = MockEngine(chat_id)
+        clusdt_bal = engine.get_balance()
+        return f"{clusdt_bal:,.2f} CLUSDT (Mock)" if chat_id else f"{mock:.0f} CLUSDT"
 
 def get_balance_display(chat_id: int) -> str:
     """Return a concise balance line for the current user state."""
     state = get_state(chat_id)
-    real, mock = get_balance()
     mode = state.get("trade_mode", "MOCK")
-    balance_str = format_balance(real, mock, mode)
     margin_pct = state.get("margin", 2.0)
+    if mode == "MOCK":
+        engine = MockEngine(chat_id)
+        clusdt_bal = engine.get_balance()
+        balance_str = f"{clusdt_bal:,.2f} CLUSDT (Mock)"
+    else:
+        real, _ = get_balance()
+        balance_str = f"${real:.3f} USDT" if real is not None else "Real: N/A"
     return f"💎 Balance: {balance_str} | Margin: {margin_pct:.1f}%"
 
 def get_mode_header(chat_id: int) -> str:
@@ -692,13 +705,6 @@ def get_open_trades_count() -> int:
         return len([t for t in trades if t.get('is_open', False)])
     except Exception:
         return 0
-
-    wins = s.get("wins", 0)
-    losses = s.get("losses", 0)
-    total = wins + losses
-    win_rate = (wins / total * 100) if total > 0 else 0
-    realized_pnl = s.get("total_profit_abs", 0)
-    return wins, losses, win_rate, realized_pnl
 
 
 def get_stats():
@@ -989,25 +995,6 @@ def call_stepfun_skill(prompt, retries=2):
                 logger.warning(f"Groq API error {r.status_code}: {r.text[:200]}")
         except Exception as e:
             logger.warning(f"Groq attempt {attempt+1} failed: {e}")
-    return None
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    payload = {
-        "model": "llama-3.1-8b-instant",
-        "messages": [
-            {"role": "system", "content": "You are an expert crypto scalping analyst. Provide concise TA with confidence %% (80-90) and RRR."},
-            {"role": "user", "content": prompt}
-        ],
-        "temperature": 0.7
-    }
-    for attempt in range(retries + 1):
-        try:
-            logger.debug(f"StepFun call attempt {attempt+1}/{retries+1} for: {prompt[:60]}...")
-            r = requests.post("https://api.groq.com/openai/v1/chat/completions", json=payload, headers=headers, timeout=30)
-            if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"]
-            logger.warning(f"StepFun HTTP {r.status_code}: {r.text[:100]}")
-        except Exception as e:
-            logger.error(f"StepFun error: {e}")
     return None
 
 
@@ -1428,6 +1415,7 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [wins_button(), gains_button()],
         [InlineKeyboardButton("📈 TRADE MENU", callback_data="trade_menu")],
         [InlineKeyboardButton("📊 POSITIONS", callback_data="positions")],
+        [InlineKeyboardButton("🕸️ GRID ENGINE", callback_data="grid_menu")],
         [InlineKeyboardButton("🧠 MACRO INTEL", callback_data="market_now")],
     ]
     await update.message.reply_text(f"🏠 **Clawmimoto Command Center**\n\n{bal_line}\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
@@ -1444,8 +1432,8 @@ async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     chat_id = q.message.chat_id
     state = get_state(chat_id)
-    real, mock = get_balance()
-    bal = format_balance(real, mock, state.get('trade_mode','MOCK'))
+    mode = state.get('trade_mode', 'MOCK')
+    bal = format_balance(None, None, mode, chat_id) if mode == 'MOCK' else format_balance(*get_balance(), mode)
     open_count = get_open_trades_count()
     mode_header = get_mode_header(chat_id)
     # Build new main menu
@@ -1456,13 +1444,22 @@ async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     session_label = "🤖 SESSION" if trading_mode == "session" else "🎯 MANUAL"
     open_label = f"📊 {open_count} Open Trade{'s' if open_count != 1 else ''}"
 
+    # ── Weekend banner ──
+    market_state = get_market_state()
+    weekend_banner = ""
+    if market_state.get("is_weekend", False):
+        weekend_banner = (
+            "📉 **WEEKEND** — Reduced liquidity. Mean-reversion only.\n"
+            "🕸️ Grid: conservative | ⚔️ Claw: reversal setups\n\n"
+        )
     text = (
         "╔══════════════════════╗\n"
         "║  🦞 CLAWMIMOTO       ║\n"
         "║  Trading Terminal    ║\n"
         "╚══════════════════════╝\n\n"
         f"{mock_label}  |  {session_label}\n\n"
-        f"💰 {bal}   {open_label}"
+        f"💰 {bal}   {open_label}\n\n"
+        f"{weekend_banner}"
     )
     kb = [
         # Toggle switches — clickable
@@ -1473,6 +1470,7 @@ async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
          InlineKeyboardButton("📈 POSITIONS", callback_data="positions")],
         [InlineKeyboardButton("📋 HISTORY", callback_data="history"),
          InlineKeyboardButton("💰 BALANCE", callback_data="balance")],
+        [InlineKeyboardButton("🕸️ GRID ENGINE", callback_data="grid_menu")],
         [InlineKeyboardButton("📡 SOCIALS", callback_data="socials"),
          InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings")],
     ]
@@ -1856,7 +1854,7 @@ def fetch_market_data():
         price, change, source = None, None, None
         # Bybit
         try:
-            ticker = bybit_signed_request("GET", "/v5/market/tickers", params={"category": "linear", "symbol": bybit_sym})
+            ticker = bybit_signed_request("GET", "/v5/market/tickers", params={"category": "linear", "symbol": binance_sym})
             if ticker and ticker.get("retCode") == 0:
                 d = ticker["result"]["list"][0]
                 price, change = float(d["lastPrice"]), float(d.get("price24hPcnt", 0))
@@ -2974,6 +2972,30 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text(text_msg, reply_markup=InlineKeyboardMarkup(kb))
             return
 
+    if state.get("awaiting_grid_symbol"):
+        symbol = text.strip()
+        if "/" not in symbol:
+            symbol = f"{symbol}/USDT"
+        user_state[chat_id]["awaiting_grid_symbol"] = False
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text=f"🕸️ Starting grid bot for {symbol}...",
+            parse_mode="Markdown"
+        )
+        config_path = f"configs/{symbol.replace('/', '').upper()}_grid.json"
+        try:
+            result = start_grid_bot(symbol, config_path)
+            msg = f"✅ **Grid bot started for {symbol}**\n{result}" if result else f"✅ Grid bot launched for {symbol}"
+        except Exception as e:
+            msg = f"❌ **Failed to start grid for {symbol}**\n`{e}`"
+        await ctx.bot.send_message(
+            chat_id=chat_id,
+            text=msg,
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🕸️ GRID ENGINE", callback_data="grid_menu")]])
+        )
+        return
+
     if state.get("awaiting_pair_input"):
         if "/" not in text:
             await update.message.reply_text("❌ Format: BASE/QUOTE (e.g., BTC/USDT)", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
@@ -3217,8 +3239,8 @@ async def pos_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Use user's current trade mode for balance display
     chat_id = q.message.chat_id
     state = get_state(chat_id)
-    real, mock = get_balance()
-    bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
+    mode = state.get("trade_mode", "MOCK")
+    bal = format_balance(None, None, mode, chat_id) if mode == "MOCK" else format_balance(*get_balance(), mode)
     is_open = t.get("is_open", True)
 
     # Build PnL line: unrealized for open, realized for closed
@@ -3382,6 +3404,42 @@ async def confirm_exec_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         "dry_run": state["trade_mode"] == "MOCK"
     }
     logger.info(f"Executing trade: {payload} (leverage={dynamic_leverage}, conf={confidence}, trend={trend_strength:.2f})")
+
+    # ── MOCK mode: route through MockEngine ──
+    if state["trade_mode"] == "MOCK":
+        engine = MockEngine(chat_id)
+        qty = p.get("quantity", 0)
+        if qty <= 0:
+            await q.edit_message_text(
+                "❌ **Cannot execute** — quantity not computed. Run AI scan first.",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]])
+            )
+            return
+        side = "buy" if p.get("direction", "LONG") == "LONG" else "sell"
+        result = engine.place_order(p["symbol"], side, qty)
+        if result.get("status") == "filled":
+            fill_price = result.get("price", 0)
+            balance = engine.get_balance()
+            msg = (
+                f"✅ **Mock trade executed!**\n\n"
+                f"🪙 {p['symbol']} {p['direction']}\n"
+                f"💰 Fill: ${fill_price:.4f}\n"
+                f"💵 CLUSDT Balance: {balance:,.2f}\n\n"
+                f"Check POSITIONS for status."
+            )
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("📌 POSITIONS", callback_data="positions")],
+                [InlineKeyboardButton("⬅️ MAIN", callback_data="main")]
+            ])
+            await q.edit_message_text(msg, reply_markup=kb)
+            asyncio.create_task(delete_after_delay(ctx.bot, chat_id, q.message.message_id, delay=300))
+        else:
+            await q.edit_message_text(
+                f"❌ **Mock execution failed**\n\n{result.get('message', 'Unknown error')}",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]])
+            )
+        return
+
     success, error_msg = api_post("/api/v1/forcebuy", payload)
     if success:
         msg = "✅ **Trade executed!**"
@@ -3482,7 +3540,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         # Get open trades count from API
         try:
-            r = requests.get('http://172.19.0.2:8080/api/v1/status', auth=(API_USER, API_PASS), timeout=3)
+            r = requests.get(f'{API_URL}/api/v1/status', auth=(API_USER, API_PASS), timeout=3)
             if r.status_code == 200:
                 trades_list = r.json()
                 if isinstance(trades_list, list):
@@ -3595,7 +3653,7 @@ async def profit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     try:
         # Open trades (unrealized) — use /api/v1/status which returns list of open trades
-        r_open = requests.get('http://172.19.0.2:8080/api/v1/status', auth=(API_USER, API_PASS), timeout=5)
+        r_open = requests.get(f'{API_URL}/api/v1/status', auth=(API_USER, API_PASS), timeout=5)
         if r_open.status_code == 200:
             open_trades = r_open.json()
             if isinstance(open_trades, list):
@@ -3610,7 +3668,7 @@ async def profit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             lines.append("❌ Cannot fetch open trades")
 
         # Closed trades (realized) — last 20
-        r_closed = requests.get('http://172.19.0.2:8080/api/v1/trades?status=closed&limit=20', auth=(API_USER, API_PASS), timeout=5)
+        r_closed = requests.get(f'{API_URL}/api/v1/trades?status=closed&limit=20', auth=(API_USER, API_PASS), timeout=5)
         if r_closed.status_code == 200:
             data_closed = r_closed.json()
             closed_trades = data_closed.get('trades', [])
@@ -3665,7 +3723,7 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         today = datetime.now(timezone.utc).strftime('%Y-%m-%d')
 
         # Open trades (unrealized) — filter those opened today
-        r_open = requests.get('http://172.19.0.2:8080/api/v1/status', auth=(API_USER, API_PASS), timeout=5)
+        r_open = requests.get(f'{API_URL}/api/v1/status', auth=(API_USER, API_PASS), timeout=5)
         open_today = []
         if r_open.status_code == 200:
             open_trades = r_open.json()
@@ -3684,7 +3742,7 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     lines.append("📈 No open trades from today yet")
 
         # Closed trades (realized) — opened today
-        r_closed = requests.get('http://172.19.0.2:8080/api/v1/trades?status=closed&limit=50', auth=(API_USER, API_PASS), timeout=5)
+        r_closed = requests.get(f'{API_URL}/api/v1/trades?status=closed&limit=50', auth=(API_USER, API_PASS), timeout=5)
         closed_today = []
         if r_closed.status_code == 200:
             data_closed = r_closed.json()
@@ -4086,6 +4144,108 @@ async def refresh_pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     except Exception as e:
         logger.error(f"refresh_pair_detail error: {e}", exc_info=True)
         await q.edit_message_text(f"❌ Refresh failed: {str(e)[:100]}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="main")]]))
+# ── Grid Engine Handlers ──
+async def grid_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Grid Engine control panel — shows active bots, start/stop controls."""
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
+    q = update.callback_query
+    await q.answer()
+    chat_id = q.message.chat_id
+    state = get_state(chat_id)
+    mode_header = get_mode_header(chat_id)
+    bal_line = get_balance_display(chat_id)
+
+    raw_bots = get_active_grid_bots()  # {symbol: pid}
+    grid_params = get_grid_params({"trade_mode": state.get("trade_mode", "MOCK")})
+
+    lines = [
+        f"{mode_header}",
+        f"━━━━━━━━━━━━━━━━━━━━\n",
+        f"🕸️ **GRID ENGINE**\n",
+        f"{bal_line}\n",
+    ]
+    if grid_params:
+        lines.append(f"📐 Grid: {grid_params.get('grid_size','?')}x | "
+                      f"Spread: {grid_params.get('spread_pct','?')}% | "
+                      f"Per Grid: ${grid_params.get('per_grid','?')}")
+    lines.append("")
+    if raw_bots:
+        lines.append(f"**Active Bots ({len(raw_bots)}):**")
+        for sym, pid in raw_bots.items():
+            lines.append(f"  • {sym} (PID {pid})")
+    else:
+        lines.append("_No grid bots running._")
+    lines.append("")
+
+    kb = []
+    if raw_bots:
+        for sym, pid in raw_bots.items():
+            kb.append([InlineKeyboardButton(f"⏹ Stop {sym}", callback_data=f"grid_stop:{sym}")])
+    kb.append([InlineKeyboardButton("➕ Start New Grid", callback_data="grid_start:prompt")])
+    kb.append([InlineKeyboardButton("🔄 Refresh", callback_data="grid_status")])
+    kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="main")])
+
+    text = "\n".join(lines)
+    await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
+
+async def grid_start_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Start a grid bot for a given symbol — triggered by callback or text prompt."""
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
+    q = update.callback_query
+    await q.answer()
+    chat_id = q.message.chat_id
+    symbol = q.data[len("grid_start:"):]
+
+    if symbol == "prompt":
+        # Ask user to type a symbol
+        user_state.setdefault(chat_id, {})
+        user_state[chat_id]["awaiting_grid_symbol"] = True
+        await q.edit_message_text(
+            "⌨️ **Start Grid Bot**\n\nType the trading pair symbol (e.g., `BTC/USDT`) to start a grid bot.\n\nSend it in chat.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="grid_menu")]])
+        )
+        return
+
+    # Start the grid bot
+    config_path = f"configs/{symbol.replace('/', '').upper()}_grid.json"
+    try:
+        result = start_grid_bot(symbol, config_path)
+        msg = f"✅ **Grid bot started for {symbol}**\n{result}" if result else f"✅ Grid bot launched for {symbol}"
+    except Exception as e:
+        msg = f"❌ **Failed to start grid for {symbol}**\n`{e}`"
+    await q.edit_message_text(
+        msg,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh", callback_data="grid_status")],
+                                            [InlineKeyboardButton("⬅️ BACK", callback_data="grid_menu")]])
+    )
+
+async def grid_stop_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Stop a running grid bot for a given symbol."""
+    if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
+        return
+    q = update.callback_query
+    await q.answer()
+    symbol = q.data[len("grid_stop:"):]
+    try:
+        stop_grid_bot(symbol)
+        msg = f"⏹ **Grid bot stopped for {symbol}**"
+    except Exception as e:
+        msg = f"❌ **Failed to stop grid for {symbol}**\n`{e}`"
+    await q.edit_message_text(
+        msg,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔄 Refresh", callback_data="grid_status")],
+                                            [InlineKeyboardButton("⬅️ BACK", callback_data="grid_menu")]])
+    )
+
+async def grid_status_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Refresh the grid engine panel."""
+    await grid_menu_cb(update, ctx)
+
 async def history_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
         return
@@ -4115,12 +4275,9 @@ async def history_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         total_pnl = sum((t.get("profit_ratio") or 0) * 100 for t in trades)
         sign = "+" if total_pnl >= 0 else ""
         text = (
-            "📋 *TRADE HISTORY* — Last 10
-"
-            "━━━━━━━━━━━━━━━━━━━━
-"
-            f"{wins}W / {len(trades) - wins}L  |  {sign}{total_pnl:.2f}%
-"
+            "📋 *TRADE HISTORY* — Last 10\n"
+            "━━━━━━━━━━━━━━━━━━━━\n"
+            f"{wins}W / {len(trades) - wins}L  |  {sign}{total_pnl:.2f}%\n"
             f"[📊 Open Full Dashboard]({DASHBOARD})"
         )
         kb = []
@@ -4163,19 +4320,18 @@ def main():
     if not TOKEN:
         logger.error("TELEGRAM_BOT_TOKEN not set")
         return
-    # Wait for Freqtrade API to become available (retry up to 10 times)
-    max_tries = 10
-    for i in range(max_tries):
+    # Try to connect to Freqtrade API (non-blocking — degrade gracefully)
+    freqtrade_connected = False
+    for i in range(5):
         test = api_get("/api/v1/ping")
         if test:
+            freqtrade_connected = True
             logger.info("Connected to Freqtrade API")
             break
-        logger.warning(f"Freqtrade API not reachable (attempt {i+1}/{max_tries}), retrying in 5s...")
-        time.sleep(5)
-    else:
-        logger.error("Cannot connect to Freqtrade API after retries — exiting")
-        return
-    logger.info("Connected to Freqtrade API")
+        logger.warning(f"Freqtrade API not reachable (attempt {i+1}/5), retrying in 3s...")
+        time.sleep(3)
+    if not freqtrade_connected:
+        logger.warning("Freqtrade API not available — starting in degraded mode (no trading)")
     app = Application.builder().token(TOKEN).post_init(set_commands).build()
     app.add_handler(CommandHandler("watch", watch_command))
     app.add_handler(CommandHandler("profit", profit_command))
@@ -4235,6 +4391,10 @@ def main():
     app.add_handler(CallbackQueryHandler(session_approve_cb, pattern=r'^session_approve_'))
     app.add_handler(CallbackQueryHandler(session_skip_cb, pattern=r'^session_skip_'))
     app.add_handler(CallbackQueryHandler(history_cb, pattern='^history$'))
+    app.add_handler(CallbackQueryHandler(grid_menu_cb, pattern="^grid_menu$"))
+    app.add_handler(CallbackQueryHandler(grid_start_cb, pattern="^grid_start:"))
+    app.add_handler(CallbackQueryHandler(grid_stop_cb, pattern="^grid_stop:"))
+    app.add_handler(CallbackQueryHandler(grid_status_cb, pattern="^grid_status$"))
     app.add_error_handler(error_handler)
     logger.info("Starting Clawmimoto Telegram UI...")
     # Start background snapshot thread (every 4 hours)
