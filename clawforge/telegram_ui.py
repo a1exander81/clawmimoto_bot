@@ -102,7 +102,7 @@ async def auto_refresh_position(chat_id: int, trade_id: str, context: ContextTyp
             # Rebuild the detail view text & buttons (similar to pos_detail_cb)
             state = get_state(chat_id)
             real, mock = get_balance()
-            bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
+            bal = format_balance(real, mock, state.get("trade_mode", "MOCK"), chat_id)
             is_open = t.get("is_open", True)
             if is_open:
                 pnl_line = f"Unrealized: {t.get('profit_pct',0):+.1f}%"
@@ -1369,11 +1369,6 @@ def mode_button(mode):
     label = "🔴 REAL" if mode == "REAL" else "🟢 MOCK"
     return InlineKeyboardButton(f"⚙️ {label}", callback_data="toggle_mode")
 
-def balance_button(mode):
-    real, mock = get_balance()
-    bal = format_balance(real, mock, mode)
-    return InlineKeyboardButton(f"💵 {bal}", callback_data="show_balance")
-
 def wins_button():
     return InlineKeyboardButton(f"🏆 {format_wins()}", callback_data="show_stats")
 
@@ -1415,7 +1410,6 @@ async def start(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [wins_button(), gains_button()],
         [InlineKeyboardButton("📈 TRADE MENU", callback_data="trade_menu")],
         [InlineKeyboardButton("📊 POSITIONS", callback_data="positions")],
-        [InlineKeyboardButton("🕸️ GRID ENGINE", callback_data="grid_menu")],
         [InlineKeyboardButton("🧠 MACRO INTEL", callback_data="market_now")],
     ]
     await update.message.reply_text(f"🏠 **Clawmimoto Command Center**\n\n{bal_line}\n\n{news}", reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
@@ -1469,10 +1463,8 @@ async def main_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         [InlineKeyboardButton("🤖 AI SCAN", callback_data="ai_scan"),
          InlineKeyboardButton("📈 POSITIONS", callback_data="positions")],
         [InlineKeyboardButton("📋 HISTORY", callback_data="history"),
-         InlineKeyboardButton("💰 BALANCE", callback_data="balance")],
-        [InlineKeyboardButton("🕸️ GRID ENGINE", callback_data="grid_menu")],
-        [InlineKeyboardButton("📡 SOCIALS", callback_data="socials"),
-         InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings")],
+         InlineKeyboardButton("📡 SOCIALS", callback_data="socials")],
+        [InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings")],
     ]
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
 
@@ -1502,9 +1494,11 @@ async def set_trade_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.answer("🔴 Switched to REAL mode", show_alert=True)
     elif action == "set_manual":
         state["trading_mode"] = "manual"
+        state["mode"] = "manual"  # sync for header/scan reads
         await q.answer("🎯 Manual mode active", show_alert=True)
     elif action == "set_session":
         state["trading_mode"] = "session"
+        state["mode"] = "session"  # sync for header/scan reads
         await q.answer("🤖 Session mode active", show_alert=True)
     await settings_cb(update, ctx)
 
@@ -1537,8 +1531,9 @@ async def toggle_trading_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
     chat_id = q.message.chat_id
     state = get_state(chat_id)
     current = state.get("trading_mode", "manual")
-    state["trading_mode"] = "session" if current == "manual" else "manual"
-    new_mode = state["trading_mode"]
+    new_mode = "session" if current == "manual" else "manual"
+    state["trading_mode"] = new_mode
+    state["mode"] = new_mode  # sync mode key for ai_scan_cb and others
     await q.answer(f"Switched to {new_mode.upper()} mode", show_alert=True)
     await trade_menu_cb(update, ctx)
 
@@ -1550,53 +1545,65 @@ async def show_balance_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     chat_id = q.message.chat_id
     state = get_state(chat_id)
     mode = state.get("trade_mode", "MOCK")
-    currency = "CLUSDT" if mode == "MOCK" else "USDT"
 
-    # Fetch balance data from Freqtrade API
-    balance_data = api_get("/api/v1/balance") or {}
-    # Parse free and total from balance_data (handle both top-level and currencies list)
-    free = 0.0
-    total = 0.0
-    # Try top-level keys first
-    if "free" in balance_data:
-        free = float(balance_data.get("free", 0) or 0)
-    if "total" in balance_data:
-        total = float(balance_data.get("total", 0) or 0)
-    # If currencies list present, sum available/est_stake
-    currencies = balance_data.get("currencies", [])
-    if currencies:
-        for curr in currencies:
-            # Use 'available' if present, else 'balance'
-            curr_free = float(curr.get("available", curr.get("balance", 0) or 0))
-            # Use 'est_stake' if present, else 'balance'
-            curr_total = float(curr.get("est_stake", curr.get("balance", 0) or 0))
-            free += curr_free
-            total += curr_total
-    starting = float(balance_data.get("starting_capital", 0) or 0)
+    if mode == "MOCK":
+        # ── MOCK mode: use MockEngine backed by Supabase ──
+        engine = MockEngine(chat_id)
+        clusdt_bal = engine.get_balance()
+        positions = engine.get_all_positions()
+        unrealized = sum(float(p.get("unrealised_pnl", 0) or 0) for p in positions)
+        unrealized_sign = "➕" if unrealized >= 0 else "➖"
+        open_count = len(positions)
 
-    # Fetch unrealized PnL from open trades
-    trades = api_get("/api/v1/status") or []
-    unrealized = sum(float(t.get("profit_abs", 0) or 0) for t in trades if t.get('is_open', False))
-    unrealized_pct = (unrealized / starting * 100) if starting else 0.0
-    total_with_pnl = free + unrealized
-    overall_pnl_pct = ((total_with_pnl - starting) / starting * 100) if starting else 0.0
-    open_count = len([t for t in trades if t.get('is_open', False)])
+        text = (
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 BALANCE (MOCK)\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Balance: {clusdt_bal:,.2f} CLUSDT\n"
+            f"Open Positions: {open_count}\n"
+            f"Unrealized P&L: {unrealized_sign}{abs(unrealized):,.2f} CLUSDT\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💡 _Switch to REAL mode to see live Bybit balance_"
+        )
+    else:
+        # ── REAL mode: fetch from Freqtrade API ──
+        currency = "USDT"
+        balance_data = api_get("/api/v1/balance") or {}
+        free = 0.0
+        total = 0.0
+        if "free" in balance_data:
+            free = float(balance_data.get("free", 0) or 0)
+        if "total" in balance_data:
+            total = float(balance_data.get("total", 0) or 0)
+        currencies = balance_data.get("currencies", [])
+        if currencies:
+            for curr in currencies:
+                curr_free = float(curr.get("available", curr.get("balance", 0) or 0))
+                curr_total = float(curr.get("est_stake", curr.get("balance", 0) or 0))
+                free += curr_free
+                total += curr_total
+        starting = float(balance_data.get("starting_capital", 0) or 0)
 
-    # Determine sign emoji
-    unrealized_sign = "➕" if unrealized >= 0 else "➖"
+        trades = api_get("/api/v1/status") or []
+        unrealized = sum(float(t.get("profit_abs", 0) or 0) for t in trades if t.get('is_open', False))
+        unrealized_pct = (unrealized / starting * 100) if starting else 0.0
+        total_with_pnl = free + unrealized
+        overall_pnl_pct = ((total_with_pnl - starting) / starting * 100) if starting else 0.0
+        open_count = len([t for t in trades if t.get('is_open', False)])
+        unrealized_sign = "➕" if unrealized >= 0 else "➖"
 
-    text = (
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"💰 BALANCE\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━\n"
-        f"Available: ${free:.2f} {currency}\n"
-        f"Unrealized: {unrealized_sign}${abs(unrealized):.2f} ({unrealized_pct:+.2f}%)\n"
-        f"Total w/ PnL: ${total_with_pnl:.2f} {currency}\n"
-        f"Started: ${starting:.2f} {currency}\n"
-        f"Overall P&L: {overall_pnl_pct:+.2f}%\n"
-        f"Open Trades: {open_count}\n"
-        f"━━━━━━━━━━━━━━━━━━━━━━"
-    )
+        text = (
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"💰 BALANCE (REAL)\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Available: ${free:.2f} {currency}\n"
+            f"Unrealized: {unrealized_sign}${abs(unrealized):.2f} ({unrealized_pct:+.2f}%)\n"
+            f"Total w/ PnL: ${total_with_pnl:.2f} {currency}\n"
+            f"Started: ${starting:.2f} {currency}\n"
+            f"Overall P&L: {overall_pnl_pct:+.2f}%\n"
+            f"Open Trades: {open_count}\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━"
+        )
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
 
 async def show_stats_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -2223,9 +2230,18 @@ async def trade_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     trading_mode = state.get("mode", "manual")
     mode_emoji = "🤖" if trading_mode == "session" else "🎯"
     dry_emoji = "🔵" if mode == "MOCK" else "🔴"
-    real, mock = get_balance()
-    bal = mock if mode == "MOCK" else (real or 0)
-    currency = "CLUSDT" if mode == "MOCK" else "USDT"
+
+    # Use MockEngine for MOCK mode balance
+    if mode == "MOCK":
+        engine = MockEngine(chat_id)
+        bal = engine.get_balance()
+        currency = "CLUSDT"
+        bal_display = f"{bal:,.2f} {currency}"
+    else:
+        real, _ = get_balance()
+        bal = real or 0
+        currency = "USDT"
+        bal_display = f"${bal:.3f} {currency}"
 
     text = (
         f"╔══════════════════════╗\n"
@@ -2233,21 +2249,21 @@ async def trade_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         f"║ Trading Terminal ║\n"
         f"╚══════════════════════╝\n\n"
         f"{dry_emoji} {mode} | {mode_emoji} {trading_mode.upper()}\n"
-        f"💰 Balance: {bal:.2f} {currency}\n"
+        f"💰 Balance: {bal_display}\n"
     )
 
     kb = [
         [InlineKeyboardButton("📊 SCAN", callback_data="ai_scan"),
-         InlineKeyboardButton("💰 BALANCE", callback_data="show_balance")],
-        [InlineKeyboardButton("📈 POSITIONS", callback_data="positions"),
-         InlineKeyboardButton("📋 HISTORY", callback_data="history")],
+         InlineKeyboardButton("📈 POSITIONS", callback_data="positions")],
+        [InlineKeyboardButton("📋 HISTORY", callback_data="history"),
+         InlineKeyboardButton("🕸️ GRID ENGINE", callback_data="grid_menu")],
         [InlineKeyboardButton("🟢 MACRO ON" if state.get("macro_on") else "🔴 MACRO OFF", callback_data="toggle_macro"),
          InlineKeyboardButton("🤖 SUTAMM ON" if state.get("sutamm") else "💤 SUTAMM OFF", callback_data="toggle_sutamm")],
-        [InlineKeyboardButton("📡 SOCIALS", callback_data="socials"),
-         InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings")],
         [InlineKeyboardButton("🤖 SESSION MODE", callback_data="session_mode"),
          InlineKeyboardButton("🎯 MANUAL MODE", callback_data="manual_mode")],
-        [InlineKeyboardButton("📊 STATS", callback_data="show_stats")],
+        [InlineKeyboardButton("📡 SOCIALS", callback_data="socials"),
+         InlineKeyboardButton("📊 STATS", callback_data="show_stats")],
+        [InlineKeyboardButton("⚙️ SETTINGS", callback_data="settings")],
     ]
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb))
 
@@ -2287,7 +2303,7 @@ async def session_mode_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     state = get_state(chat_id)
     state["mode"] = "session"
     real, mock = get_balance()
-    bal = format_balance(real, mock, state["trade_mode"])
+    bal = format_balance(real, mock, state["trade_mode"], chat_id)
     lev = state["leverage"]
     mar = state["margin"]
     margin_val = (10000 if state["trade_mode"] == "MOCK" else (real or 10000)) * (mar / 100)
@@ -2325,17 +2341,28 @@ async def ai_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await q.answer()
     chat_id = q.message.chat_id
     state = get_state(chat_id)
+    trading_mode = state.get("mode", "manual")
     # Set back-context for pair detail
     user_state.setdefault(chat_id, {})
     user_state[chat_id]['pair_detail_back'] = 'ai_scan'
-    await q.edit_message_text("🔍 **AI scanning market...**\n\nFetching BingX hot pairs, analyzing 5M charts, order book, sentiment...")
+    await q.edit_message_text("🔍 **AI scanning market...**\n\nFetching Bybit movers, analyzing 5M charts, order book, sentiment...")
     pairs = ai_scan_pairs(chat_id=chat_id)
     user_state[chat_id]["selected_pairs"] = pairs
-    kb = grid_2x2(pairs) + [[
-        InlineKeyboardButton("🔄 REFRESH", callback_data="refresh_scan"),
-        InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")
-    ]]
-    await q.edit_message_text("✅ **Scan Complete - Top 4 Pairs:**\n\nSelect a pair to view details & execute:", reply_markup=InlineKeyboardMarkup(kb))
+    user_state.setdefault(chat_id, {})['scan_results'] = {p['symbol']: p for p in pairs}
+    
+    # If in manual mode, use detailed scan format (send_scan_message style)
+    if trading_mode == "manual":
+        try:
+            await q.message.delete()
+        except Exception:
+            pass
+        await send_scan_message(chat_id, pairs, ctx)
+    else:
+        kb = grid_2x2(pairs) + [[
+            InlineKeyboardButton("🔄 REFRESH", callback_data="refresh_scan"),
+            InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")
+        ]]
+        await q.edit_message_text("✅ **Scan Complete - Top 4 Pairs:**\n\nSelect a pair to view details & execute:", reply_markup=InlineKeyboardMarkup(kb))
 
 async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
@@ -2352,7 +2379,7 @@ async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     state = get_state(chat_id)
     real, mock = get_balance()
-    bal = format_balance(real, mock, state["trade_mode"])
+    bal = format_balance(real, mock, state["trade_mode"], chat_id)
     conf = p["confidence"]
     greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
     cur_price = p.get('current_price', 0)
@@ -2439,7 +2466,7 @@ async def select_pair_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         # Render detail
         state = get_state(chat_id)
         real, mock = get_balance()
-        bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
+        bal = format_balance(real, mock, state.get("trade_mode", "MOCK"), chat_id)
         conf = result['confidence']
         greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
         cur_price = result.get('current_price', 0)
@@ -2845,7 +2872,7 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 return
             # Show detail view
             real, mock = get_balance()
-            bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
+            bal = format_balance(real, mock, state.get("trade_mode", "MOCK"), chat_id)
             conf = result["confidence"]
             greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
             # Get real-time price
@@ -2928,7 +2955,7 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 return
             # Show detail view
             real, mock = get_balance()
-            bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
+            bal = format_balance(real, mock, state.get("trade_mode", "MOCK"), chat_id)
             conf = result["confidence"]
             greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
             # Get real-time price
@@ -3980,7 +4007,7 @@ async def custom_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Build detail view (same as pair_detail_cb)
     state = get_state(chat_id)
     real, mock = get_balance()
-    bal = format_balance(real, mock, state["trade_mode"])
+    bal = format_balance(real, mock, state["trade_mode"], chat_id)
     conf = result["confidence"]
     greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
     # Get real-time price for alert (prefer fresh ticker, fallback to kline price)
@@ -4093,7 +4120,7 @@ async def refresh_pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
         # Render detail (same as select_pair_cb rendering)
         state = get_state(chat_id)
         real, mock = get_balance()
-        bal = format_balance(real, mock, state.get("trade_mode", "MOCK"))
+        bal = format_balance(real, mock, state.get("trade_mode", "MOCK"), chat_id)
         conf = result['confidence']
         greens = "🟩" * ((conf - 80) // 10 + 1) if conf >= 80 else "🟨"
         cur_price = result.get('current_price', 0)
@@ -4184,7 +4211,7 @@ async def grid_menu_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             kb.append([InlineKeyboardButton(f"⏹ Stop {sym}", callback_data=f"grid_stop:{sym}")])
     kb.append([InlineKeyboardButton("➕ Start New Grid", callback_data="grid_start:prompt")])
     kb.append([InlineKeyboardButton("🔄 Refresh", callback_data="grid_status")])
-    kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="main")])
+    kb.append([InlineKeyboardButton("⬅️ BACK", callback_data="trade_menu")])
 
     text = "\n".join(lines)
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode="Markdown")
@@ -4345,7 +4372,6 @@ def main():
     app.add_handler(CallbackQueryHandler(toggle_trading_mode_cb, pattern="^toggle_trading_mode$"))
     app.add_handler(CallbackQueryHandler(socials_cb, pattern="^socials$"))
     app.add_handler(CallbackQueryHandler(lambda u,c: u.callback_query.answer(), pattern="^noop$"))
-    app.add_handler(CallbackQueryHandler(show_balance_cb, pattern="^show_balance$"))
     app.add_handler(CallbackQueryHandler(show_stats_cb, pattern="^show_stats$"))
     app.add_handler(CallbackQueryHandler(show_gains_cb, pattern="^show_gains$"))
     app.add_handler(CallbackQueryHandler(show_news_cb, pattern="^show_news$"))
