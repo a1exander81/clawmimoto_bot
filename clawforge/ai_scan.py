@@ -1,3 +1,57 @@
+"""DeepSeek AI soul — SMC+ICT scanner replaces Groq/StepFun."""
+
+import json
+import logging
+
+logger = logging.getLogger(__name__)
+
+# ── Constants ──
+VALID_SESSIONS = ["LONDON_OPEN_KZ", "LONDON_NY_KZ", "NY_CLOSE_KZ"]
+DEFAULT_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
+
+# DeepSeek model configuration
+FAST_MODEL = "deepseek-chat"
+FAST_TIMEOUT = 10.0
+DEEP_MODEL = "deepseek-reasoner"
+DEEP_TIMEOUT = 30.0
+
+
+# ── Helper functions (imported at runtime to avoid circular deps) ──
+def get_price(pair: str) -> float:
+    """Get current price for a pair. Local import to delay dependency resolution."""
+    try:
+        from clawforge.telegram_ui import get_bybit_ticker_price
+        return get_bybit_ticker_price(pair) or 0.0
+    except Exception:
+        return 0.0
+
+
+def _get_bybit_klines(pair: str, interval: str = "240", limit: int = 10) -> list:
+    """Fetch Bybit klines. Local import to delay dependency resolution."""
+    try:
+        from clawforge.telegram_ui import bybit_signed_request
+        bybit_sym = pair.replace("/", "").replace(":USDT", "").upper() + "USDT"
+        data = bybit_signed_request(
+            "GET", "/v5/market/kline",
+            params={"category": "linear", "symbol": bybit_sym, "interval": interval, "limit": limit},
+            timeout=10
+        )
+        if data and data.get("retCode") == 0:
+            return data.get("result", {}).get("list", [])
+    except Exception as e:
+        logger.warning("_get_bybit_klines error: %s", e)
+    return []
+
+
+def _call_deepseek(messages: list, model: str = FAST_MODEL, timeout: float = FAST_TIMEOUT) -> str | None:
+    """Call DeepSeek API. Local import to delay dependency resolution."""
+    try:
+        from clawforge.integrations.deepseek import _call_deepseek as deepseek_call
+        return deepseek_call(messages, model=model, retries=max(1, int(timeout / 10)))
+    except Exception as e:
+        logger.warning("_call_deepseek error: %s", e)
+        return None
+
 
 # ── Fast layer: signal gate ───────────────────────────────────────────────────
 def gate_signal(pair: str, session: str, rsi: float,
@@ -135,19 +189,44 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None,
             continue
 
         price = get_price(pair)
+        key_levels = analysis.get("key_levels", {})
+        ob_zone = analysis.get("ob_zone", [])
+
+        # Calculate SL/TP based on direction and key levels
+        sl_price = 0.0
+        tp_price = 0.0
+        if price > 0:
+            if bias == "BUY":
+                sl_price = key_levels.get("support", price * 0.99)
+                tp_price = key_levels.get("resistance", price * 1.02)
+            else:  # SELL
+                sl_price = key_levels.get("resistance", price * 1.01)
+                tp_price = key_levels.get("support", price * 0.98)
+
+        rrr = abs((tp_price - price) / (price - sl_price)) if (price - sl_price) != 0 else 0.0
+
         results.append({
+            # New schema fields
             "symbol":     pair,
             "direction":  "LONG" if bias == "BUY" else "SHORT",
             "confidence": int(confidence * 100),
             "score":      round(confidence * 10, 1),
             "bias":       bias,
             "reasoning":  analysis.get("reasoning", ""),
-            "ob_zone":    analysis.get("ob_zone", []),
+            "ob_zone":    ob_zone,
             "fvg":        analysis.get("fvg", []),
-            "key_levels": analysis.get("key_levels", {}),
+            "key_levels": key_levels,
             "session":    session,
             "price":      price,
             "exchange":   "bybit",
+            # Legacy fields for UI compatibility
+            "current_price": price,
+            "ai_score":      round(confidence * 10, 1),
+            "reasons":       analysis.get("reasoning", ""),
+            "change":        0.0,  # Not computed in this version
+            "sl":            sl_price,
+            "tp":            tp_price,
+            "rrr":           round(rrr, 2),
         })
 
     results.sort(key=lambda x: x["confidence"], reverse=True)

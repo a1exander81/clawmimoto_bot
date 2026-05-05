@@ -3,6 +3,7 @@ Claw5MSniper — Base strategy for ClawForge.
 5M TF, ISOLATED margin, 3 trades/day max, trailing SL at +50%.
 """
 
+import os
 from datetime import datetime
 
 import pandas as pd
@@ -17,12 +18,32 @@ class Claw5MSniper(IStrategy):
     timeframe = "5m"
     startup_candle_count = 50
 
-    # ── Risk Management ──
+    # ── Risk Management (configurable via env/config) ──
     max_open_trades = 3
-    stoploss = -0.01
-    trailing_stop = True
-    trailing_stop_positive = 0.01
-    trailing_stop_positive_offset = 0.012
+
+    @property
+    def stoploss(self) -> float:
+        """Configurable stoploss. Range: -0.005 to -0.05 (0.5% to 5%)"""
+        val = float(os.getenv("CLAW_STOPLOSS", "-0.01"))
+        return max(-0.05, min(-0.005, val))
+
+    @property
+    def trailing_stop(self) -> bool:
+        """Configurable trailing stop enable/disable"""
+        return os.getenv("CLAW_TRAILING_STOP", "true").lower() in ("true", "1", "yes")
+
+    @property
+    def trailing_stop_positive(self) -> float:
+        """Configurable trailing stop positive. Range: 0.005 to 0.03 (0.5% to 3%)"""
+        val = float(os.getenv("CLAW_TRAILING_STOP_POSITIVE", "0.01"))
+        return max(0.005, min(0.03, val))
+
+    @property
+    def trailing_stop_positive_offset(self) -> float:
+        """Configurable trailing stop positive offset. Range: 0.005 to 0.05 (0.5% to 5%)"""
+        val = float(os.getenv("CLAW_TRAILING_STOP_POSITIVE_OFFSET", "0.012"))
+        return max(0.005, min(0.05, val))
+
     trailing_only_offset_is_reached = True
     minimal_roi = {"0": 1.0}
 
@@ -78,8 +99,9 @@ class Claw5MSniper(IStrategy):
         if self.use_sentiment.value:
             from clawforge.integrations.deepseek import get_sentiment_score
             sentiment = get_sentiment_score(metadata["pair"])
-            if sentiment < self.sentiment_threshold.value:
-                buy_cond = False
+            # Keep buy_cond as a Series by combining sentiment check into the mask
+            cond_sentiment = sentiment >= self.sentiment_threshold.value
+            buy_cond = buy_cond & cond_sentiment
 
         df.loc[buy_cond, "buy"] = 1
         return df

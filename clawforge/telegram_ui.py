@@ -8,13 +8,8 @@ POSITIONS: list with share PNL
 
 import asyncio
 # AI Soul: DeepSeek SMC+ICT scanner (replaces Groq/StepFun)
-from clawforge.ai_scan import (
-    ai_scan_pairs,
-    call_stepfun_skill,
-    gate_signal,
-    analyze_session,
-    get_price,
-)
+# Note: ai_scan_pairs and call_stepfun_skill are defined locally in this module
+# to maintain backward compatibility with existing Groq-based implementation
 import base64
 import concurrent.futures
 import hashlib
@@ -93,7 +88,7 @@ async def cycle_facts_on_message(msg, title: str, interval: int = 4):
                     f"{title}\n\n{fact}\n\n_Still working..._",
                     parse_mode="Markdown"
                 )
-            except:
+            except Exception:
                 pass  # Message deleted or unavailable
             await asyncio.sleep(interval)
     except asyncio.CancelledError:
@@ -396,10 +391,11 @@ def get_bybit_hot_pairs(limit: int = 5) -> list:
                     break
             logger.info(f"Bybit hot USDT pairs: {pairs}")
             if pairs:
-                return pairs
+                return pairs[:limit]
     except Exception as e:
         logger.debug(f"Bybit hot pairs error: {e}")
-    fallback = ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT", "XRP/USDT:USDT"][:limit]
+    # Use normalized format matching the success path
+    fallback = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT", "XRP/USDT"][:limit]
     logger.warning("Bybit hot pairs fetch failed, using fallback USDT list")
     return fallback
 
@@ -473,7 +469,8 @@ def analyze_pair(pair):
         if "confidence" in ai_lower:
             try:
                 confidence = int("".join(filter(str.isdigit, ai_text.split("confidence")[1].split("%")[0])))
-            except: pass
+            except Exception:
+                pass
         reasons = [line.strip("- * ") for line in ai_text.split("\n") if line.strip()][:3] or reasons
     return {
         "symbol": pair,
@@ -747,8 +744,8 @@ def get_stats():
         return wins, losses, win_rate, s.get("profit_all_coin", 0), s.get("profit_all_percent", 0)
 
 def format_wins():
-    w, l, wr, _, __ = get_stats()
-    return f"{w}/{w+l} ({wr:.0f}%)"
+    w, losses, wr, _, __ = get_stats()
+    return f"{w}/{w+losses} ({wr:.0f}%)"
 
 def format_gains():
     _, __, ___, pnl_abs, pnl_pct = get_stats()

@@ -30,7 +30,7 @@ def generate_pnl_card(pair: str, profit_pct: float, margin: float, reason: str =
     try:
         font = ImageFont.truetype("DejaVuSans-Bold.ttf", 48)
         small_font = ImageFont.truetype("DejaVuSans.ttf", 32)
-    except:
+    except Exception:
         font = ImageFont.load_default()
         small_font = ImageFont.load_default()
 
