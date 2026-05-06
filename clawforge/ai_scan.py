@@ -26,6 +26,17 @@ def get_price(pair: str) -> float:
         return 0.0
 
 
+def _normalize_bybit_symbol(pair: str) -> str:
+    """Normalize pair to Bybit symbol format.
+
+    Handles BTC/USDT, BTC/USDT:USDT, BTCUSDT, BTCUSDT:USDT → BTCUSDT.
+    """
+    sym = pair.replace("/", "").replace(":USDT", "").upper()
+    if not sym.endswith("USDT"):
+        sym += "USDT"
+    return sym
+
+
 def _get_bybit_klines(pair: str, interval: str = "240", limit: int = 10) -> list:
     """
     Fetch  kline (candlestick) data for a given trading pair from Bybit's linear market kline endpoint.
@@ -40,10 +51,7 @@ def _get_bybit_klines(pair: str, interval: str = "240", limit: int = 10) -> list
     """
     try:
         from clawforge.telegram_ui import bybit_signed_request
-        # Normalize: BTC/USDT, BTC/USDT:USDT, BTCUSDT, BTCUSDT:USDT all → BTCUSDT
-        bybit_sym = pair.replace("/", "").replace(":USDT", "").upper()
-        if not bybit_sym.endswith("USDT"):
-            bybit_sym += "USDT"
+        bybit_sym = _normalize_bybit_symbol(pair)
         data = bybit_signed_request(
             "GET", "/v5/market/kline",
             params={"category": "linear", "symbol": bybit_sym, "interval": interval, "limit": limit},
@@ -131,7 +139,7 @@ def analyze_session(pairs: list, session: str,
                 pct_4h = (c - o) / o * 100 if o else 0
             except (IndexError, ValueError, ZeroDivisionError):
                 pass
-        sym = pair.replace("/", "").replace(":USDT", "USDT")
+        sym = _normalize_bybit_symbol(pair)
         enriched[sym] = {"price": price, "pct_4h": round(pct_4h, 2)}
 
     prompt = (
@@ -161,7 +169,7 @@ def analyze_session(pairs: list, session: str,
     if not content:
         logger.warning("analyze_session: no response")
         return {
-            p.replace("/", "").replace(":USDT", "USDT"): {
+            _normalize_bybit_symbol(p): {
                 "bias": "NEUTRAL", "confidence": 0.0,
                 "reasoning": "AI unavailable",
             } for p in pairs
@@ -205,7 +213,7 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None,
     results = []
 
     for pair in pairs:
-        sym = pair.replace("/", "").replace(":USDT", "USDT")
+        sym = _normalize_bybit_symbol(pair)
         analysis = playbook.get(sym, {})
         bias = analysis.get("bias", "NEUTRAL")
         confidence = float(analysis.get("confidence", 0.0))
