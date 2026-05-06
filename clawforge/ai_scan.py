@@ -1,4 +1,4 @@
-"""DeepSeek AI soul — SMC+ICT scanner replaces Groq/StepFun."""
+"""DeepSeek AI soul — SMC+ICT scanner."""
 
 import json
 import logging
@@ -30,7 +30,10 @@ def _get_bybit_klines(pair: str, interval: str = "240", limit: int = 10) -> list
     """Fetch Bybit klines. Local import to delay dependency resolution."""
     try:
         from clawforge.telegram_ui import bybit_signed_request
-        bybit_sym = pair.replace("/", "").replace(":USDT", "").upper() + "USDT"
+        # Normalize: BTC/USDT, BTC/USDT:USDT, BTCUSDT, BTCUSDT:USDT all → BTCUSDT
+        bybit_sym = pair.replace("/", "").replace(":USDT", "").upper()
+        if not bybit_sym.endswith("USDT"):
+            bybit_sym += "USDT"
         data = bybit_signed_request(
             "GET", "/v5/market/kline",
             params={"category": "linear", "symbol": bybit_sym, "interval": interval, "limit": limit},
@@ -163,7 +166,7 @@ def analyze_session(pairs: list, session: str,
 # ── Drop-in: ai_scan_pairs ───────────────────────────────────────────────────
 def ai_scan_pairs(custom_pairs=None, chat_id=None,
                   session: str = "LONDON_NY_KZ") -> list:
-    """Drop-in replacement for old Groq/StepFun ai_scan_pairs."""
+    """Scan pairs and return high-conviction setups via DeepSeek SMC+ICT analysis."""
     from clawforge.integrations.deepseek import get_sentiment_score
 
     pairs = custom_pairs if custom_pairs else DEFAULT_PAIRS
@@ -234,10 +237,10 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None,
     return results[:4]
 
 
-# ── Drop-in: call_stepfun_skill ──────────────────────────────────────────────
-def call_stepfun_skill(prompt: str, retries: int = 1) -> str | None:
-    """Backward-compatible drop-in — routes to DeepSeek chat."""
-    logger.debug("call_stepfun_skill → DeepSeek chat")
+# ── AI scoring helper (provider-agnostic name for future BYOK) ───────────────
+def call_ai_skill(prompt: str, retries: int = 1) -> str | None:
+    """AI scoring call — routes to DeepSeek (BYOK planned)."""
+    logger.debug("call_ai_skill → DeepSeek chat")
     return _call_deepseek(
         [{"role": "user", "content": prompt}],
         model=FAST_MODEL,
