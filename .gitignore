@@ -102,3 +102,5 @@ user_data/*.json
 user_data/*.db
 logs/*.log
 scripts/session_cache/
+_planning/
+.DS_Store
