@@ -442,7 +442,22 @@ def get_bybit_klines(symbol: str, interval: str = "5", limit: int = 50):
 
 # ── Single Pair Analyzer ──
 def analyze_pair(pair):
-    """Analyze a single pair (format 'BTC/USDT') and return result dict."""
+    """
+    Produce a scalp analysis for the given trading pair on the 5-minute timeframe.
+    
+    Parameters:
+        pair (str): Trading pair in the form "BASE/USDT" (e.g., "BTC/USDT").
+    
+    Returns:
+        result (dict): Analysis containing:
+            - symbol (str): The original pair string.
+            - direction (str): Suggested direction, either "LONG" or "SHORT".
+            - change (float): Percent price change between the last two 5m closes, rounded to two decimals.
+            - volume (float): Sum of recent volumes used in the analysis.
+            - confidence (int): Confidence score (0-100) for the suggested direction.
+            - reasons (list[str]): Up to three short textual reasons supporting the suggestion.
+            - current_price (float): Latest observed price used for the analysis.
+    """
     print(f"[DEBUG] analyze_pair called with: {pair}")
     symbol = pair.replace("/", "")
     klines_data = get_bybit_klines(symbol, interval="5", limit=50)
@@ -948,7 +963,17 @@ def format_scan_result(ind, score, ob_ratio, funding):
 
 
 def get_bybit_top_movers(limit=20):
-    """Fetch top movers by volume from Bybit."""
+    """
+    Return Bybit USDT perpetual symbols with the highest 24h turnover.
+    
+    Filters results to symbols ending with "USDT", excludes symbols containing common stablecoin substrings (e.g., "USDC", "DAI", "BUSD", "TUSD"), and excludes symbols with a last price below $1. Results are sorted by 24h turnover and formatted as Freqtrade-style pair strings like "BASE/USDT:USDT". On error or if no suitable symbols are found, a small default list of major pairs is returned.
+    
+    Parameters:
+        limit (int): Maximum number of pairs to return.
+    
+    Returns:
+        list[str]: A list of formatted pair strings (e.g., "BTC/USDT:USDT").
+    """
     try:
         r = requests.get(
             "https://api.bybit.com/v5/market/tickers",
@@ -979,7 +1004,16 @@ def get_bybit_top_movers(limit=20):
 
 
 async def log_trade_to_channel(bot, trade_data: dict, trade_id):
-    """Send executed trade notification to @RightclawTrade channel."""
+    """
+    Send a formatted notification about an executed trade to the configured channel.
+    
+    Formats a message from `trade_data` (expects keys like `symbol`, `direction`, `entry`, `sl`, `tp`, `confidence`, `ai_score`) and posts it to the channel specified by the `RIGHTCLAW_CHANNEL` environment variable (defaults to "@RightclawTrade"). Failures to deliver are logged.
+    
+    Parameters:
+        bot: Telegram bot/client used to send the message.
+        trade_data (dict): Trade details used to build the notification.
+        trade_id: Identifier for the executed trade (used for context).
+    """
     channel = os.getenv("RIGHTCLAW_CHANNEL", "@RightclawTrade")
     p = trade_data
     text = (
@@ -2137,6 +2171,15 @@ async def session_adjust_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await session_mode_cb(update, ctx)
 
 async def ai_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Start an AI market scan, save results to per-chat state, and update the UI based on the chat's trading mode.
+    
+    Performs an AI-driven market scan for the invoking chat, stores the selected pairs and scan results in user_state (including a back-context marker), and updates the originating callback message. If no high-conviction setups are found, replaces the message with an explanatory empty-state. In manual trading mode it removes the callback message and sends a detailed scan message; otherwise it edits the message to show a 2x2 grid of top pairs with refresh and back buttons.
+    
+    Parameters:
+        update (telegram.Update): The callback query update that triggered the scan.
+        ctx (ContextTypes.DEFAULT_TYPE): The handler context.
+    """
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
         return
     q = update.callback_query
@@ -2512,9 +2555,13 @@ async def more_opportunities_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def extract_pair_from_link(url: str):
-    """Extract trading pair symbol from exchange or TradingView links.
-    Supports: Bybit, Binance, BingX, TradingView, Twitter/X cashtags.
-    Returns formatted pair like "BTC/USDT" or None.
+    """
+    Extract a normalized trading pair identifier from a URL referencing crypto markets or discussions.
+    
+    Supports Bybit, Binance, BingX, TradingView symbol links, and Twitter/X posts (uses AI to infer pair from context). Returned pair uses the normalized Bybit-style format `BASE/USDT:USDT`.
+    
+    Returns:
+        str: The detected pair formatted as `BASE/USDT:USDT`, or `None` if no pair could be determined.
     """
     import re
     from urllib.parse import parse_qs, urlparse
@@ -3627,7 +3674,15 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── Scan Command ──
 async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /scan command: run AI scan asynchronously and send results."""
+    """
+    Run an AI market scan in the background and deliver results to the chat.
+    
+    Performs access checks, clears any stale scan cache for the chat, acknowledges the request with a status message, then schedules an asynchronous AI scan. When the scan completes successfully, stores the discovered setups in `user_state[chat_id]["selected_pairs"]` and sends the formatted scan results to the chat; on failure or if no setups are found, updates the status message with an appropriate notification or error summary.
+    
+    Parameters:
+        update (telegram.Update): Incoming Telegram update for the /scan command.
+        context (telegram.ext.ContextTypes.DEFAULT_TYPE): Handler context providing bot and user state.
+    """
     if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
         return
     chat_id = update.effective_chat.id
@@ -3641,6 +3696,11 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
 
     async def do_scan():
+        """
+        Run an AI-powered market scan and deliver results to the chat.
+        
+        Performs the scan in a background executor, stores found setups in user_state[chat_id]["selected_pairs"], deletes or updates the intermediate status message, and sends the formatted scan results to the chat. If no setups are found, updates the status message with a "no high-conviction setups" notice. On unexpected errors, logs the exception and attempts to update the status message with a truncated error description.
+        """
         try:
             # Run blocking scan in executor to avoid blocking event loop
             loop = asyncio.get_event_loop()
@@ -3667,7 +3727,11 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(do_scan())
 
 async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Re-run scan and update message (async)."""
+    """
+    Refresh the AI market scan for the invoking chat and update the originating Telegram message.
+    
+    Clears any cached scan results for the chat, schedules a background scan task that fetches fresh setups, stores successful results in user_state[chat_id]["selected_pairs"], deletes the original callback message when possible, and sends an updated scan message. If no setups are found or an error occurs, edits the original message with an explanatory or retry/back UI. Access control (whitelist/channel) is enforced before any work is performed.
+    """
     if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
         return
     query = update.callback_query
@@ -3678,6 +3742,11 @@ async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TY
         user_state[chat_id].pop("scan_results", None)
 
     async def do_refresh():
+        """
+        Refreshes the AI scan for the current chat and updates the Telegram UI with the results.
+        
+        Runs an AI-driven scan, stores found setups into the chat's state under `selected_pairs`, deletes the originating message when appropriate, and sends the formatted scan results to the chat. If no high-conviction setups are found, edits the UI to inform the user and provide a BACK option. On error, logs the failure and attempts to update the UI with a short failure message and retry/back actions.
+        """
         try:
             # Run blocking scan in executor
             loop = asyncio.get_event_loop()

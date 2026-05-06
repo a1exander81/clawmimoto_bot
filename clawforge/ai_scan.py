@@ -27,7 +27,17 @@ def get_price(pair: str) -> float:
 
 
 def _get_bybit_klines(pair: str, interval: str = "240", limit: int = 10) -> list:
-    """Fetch Bybit klines. Local import to delay dependency resolution."""
+    """
+    Fetch  kline (candlestick) data for a given trading pair from Bybit's linear market kline endpoint.
+    
+    Parameters:
+        pair (str): Trading pair in formats like "BTC/USDT", "BTCUSDT", or "BTC/USDT:USDT". The function normalizes these to a Bybit symbol (e.g., "BTCUSDT").
+        interval (str): Kline interval string accepted by Bybit (default "240" for 4-hour candles).
+        limit (int): Maximum number of kline entries to retrieve (default 10).
+    
+    Returns:
+        list: A list of kline entries as returned by the Bybit API (empty list if the request fails, the response is invalid, or no data is available).
+    """
     try:
         from clawforge.telegram_ui import bybit_signed_request
         # Normalize: BTC/USDT, BTC/USDT:USDT, BTCUSDT, BTCUSDT:USDT all → BTCUSDT
@@ -166,7 +176,28 @@ def analyze_session(pairs: list, session: str,
 # ── Drop-in: ai_scan_pairs ───────────────────────────────────────────────────
 def ai_scan_pairs(custom_pairs=None, chat_id=None,
                   session: str = "LONDON_NY_KZ") -> list:
-    """Scan pairs and return high-conviction setups via DeepSeek SMC+ICT analysis."""
+    """
+                  Scan trading pairs with DeepSeek SMC+ICT analysis and return the top high-conviction setups.
+                  
+                  This function analyzes each pair using the deep session analyzer, applies sentiment and confidence filters, computes suggested stop-loss/take-profit and risk-reward, and returns the highest-confidence trade candidates (up to four), sorted by confidence.
+                  
+                  Parameters:
+                      custom_pairs (list | None): Optional list of symbol strings to analyze (e.g., ["BTC/USDT"]). If omitted, DEFAULT_PAIRS is used.
+                      chat_id (Any | None): Optional compatibility parameter (not used by the scanner).
+                      session (str): Session identifier to analyze (e.g., "LONDON_NY_KZ"). Defaults to "LONDON_NY_KZ".
+                  
+                  Returns:
+                      list: A list (up to 4 items) of result dictionaries for each high-conviction setup. Each dictionary includes keys such as:
+                          - symbol: original pair string
+                          - direction: "LONG" or "SHORT"
+                          - confidence: integer percent confidence (0-100)
+                          - score / ai_score: scaled score derived from confidence
+                          - bias: "BUY" / "SELL" / "NEUTRAL"
+                          - reasoning / reasons: AI-provided reasoning text
+                          - ob_zone, fvg, key_levels: liquidity and level information from analysis
+                          - session, price, exchange
+                          - current_price, sl, tp, rrr, change: legacy/UI fields including computed stop-loss, take-profit, and risk-reward ratio
+                  """
     from clawforge.integrations.deepseek import get_sentiment_score
 
     pairs = custom_pairs if custom_pairs else DEFAULT_PAIRS
@@ -239,7 +270,16 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None,
 
 # ── AI scoring helper (provider-agnostic name for future BYOK) ───────────────
 def call_ai_skill(prompt: str, retries: int = 1) -> str | None:
-    """AI scoring call — routes to DeepSeek (BYOK planned)."""
+    """
+    Send a text prompt to the AI scoring service and return its raw response.
+    
+    Parameters:
+    	prompt (str): The user-facing prompt to send to the AI.
+    	retries (int): Number of retry attempts; increases the request timeout by multiplying the base timeout by max(1, retries).
+    
+    Returns:
+    	str | None: The AI's response text, or `None` if the call failed or timed out.
+    """
     logger.debug("call_ai_skill → DeepSeek chat")
     return _call_deepseek(
         [{"role": "user", "content": prompt}],
