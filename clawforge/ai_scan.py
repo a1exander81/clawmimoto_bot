@@ -29,9 +29,10 @@ def get_price(pair: str) -> float:
 def _normalize_bybit_symbol(pair: str) -> str:
     """Normalize pair to Bybit symbol format.
 
-    Handles BTC/USDT, BTC/USDT:USDT, BTCUSDT, BTCUSDT:USDT → BTCUSDT.
+    Handles BTC/USDT, BTC/USDT:USDT, BTCUSDT, BTCUSDT:USDT, btc/usdt → BTCUSDT.
+    Case-insensitive: uppercases input first, then strips separators and suffix.
     """
-    sym = pair.replace("/", "").replace(":USDT", "").upper()
+    sym = pair.upper().replace("/", "").replace(":USDT", "")
     if not sym.endswith("USDT"):
         sym += "USDT"
     return sym
