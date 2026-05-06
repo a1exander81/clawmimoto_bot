@@ -10,9 +10,7 @@ import asyncio
 # AI Soul: DeepSeek SMC+ICT scanner via clawforge.ai_scan
 from clawforge.ai_scan import (
     ai_scan_pairs,
-    analyze_session,
     call_ai_skill,
-    gate_signal,
 )
 import base64
 import concurrent.futures
