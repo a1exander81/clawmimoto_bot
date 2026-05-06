@@ -24,7 +24,6 @@ def _log_ai_call(function: str, outcome: str, latency_ms: float,
 
 
 # ── Constants ──
-VALID_SESSIONS = ["LONDON_OPEN_KZ", "LONDON_NY_KZ", "NY_CLOSE_KZ"]
 DEFAULT_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
 
 # DeepSeek model configuration
@@ -91,64 +90,6 @@ def _call_deepseek(messages: list, model: str = FAST_MODEL, timeout: float = FAS
     except Exception as e:
         logger.warning("_call_deepseek error: %s", e)
         return None
-
-
-# ── Fast layer: signal gate ───────────────────────────────────────────────────
-def gate_signal(pair: str, session: str, rsi: float,
-                macd_hist: float, ema_cross: int,
-                direction: str = "LONG") -> dict:
-    """Fast DeepSeek gate on every 5M candle. Fallback: CONFIRM."""
-    FALLBACK = {"decision": "CONFIRM", "confidence": 0.5,
-                "reason": "AI timeout — fallback confirm"}
-
-    if session not in VALID_SESSIONS:
-        return {"decision": "REJECT", "confidence": 0.95,
-                "reason": f"Outside kill zone: {session}"}
-
-    price = get_price(pair)
-    price_str = f"${price:,.4f}" if price else "unavailable"
-
-    prompt = (
-        f"You are a conservative ICT/SMC crypto trader. Exchange: Bybit perpetual futures.\n"
-        f"Evaluate this {pair} {direction} signal on 5M timeframe.\n\n"
-        f"Price: {price_str} | Session: {session}\n"
-        f"RSI: {rsi:.1f} | MACD hist: {macd_hist:.4f} | EMA cross: "
-        f"{'bullish' if ema_cross == 1 else 'bearish'}\n\n"
-        f"CONFIRM only if ALL pass:\n"
-        f"1. RSI not overbought >75 (LONG) or oversold <25 (SHORT)\n"
-        f"2. MACD histogram aligns with direction\n"
-        f"3. EMA cross aligns with direction\n"
-        f"4. No obvious liquidity grab at extreme\n\n"
-        f"JSON only: {{\"decision\": \"CONFIRM|REJECT|HOLD\", "
-        f"\"confidence\": 0.0-1.0, \"reason\": \"one line\"}}"
-    )
-
-    t0 = time.monotonic()
-    content = _call_deepseek(
-        [{"role": "user", "content": prompt}],
-        model=FAST_MODEL, timeout=FAST_TIMEOUT,
-    )
-    latency_ms = (time.monotonic() - t0) * 1000
-    if not content:
-        _log_ai_call("gate_signal", "fallback_confirm", latency_ms,
-                     pair=pair, error="no_response")
-        return FALLBACK
-    try:
-        result = json.loads(content)
-        decision = result.get("decision", "CONFIRM").upper()
-        if decision not in ("CONFIRM", "REJECT", "HOLD"):
-            decision = "CONFIRM"
-        confidence = float(result.get("confidence", 0.5))
-        _log_ai_call("gate_signal", decision.lower(), latency_ms,
-                     pair=pair, confidence=f"{confidence:.2f}")
-        return {"decision": decision,
-                "confidence": confidence,
-                "reason": str(result.get("reason", ""))[:200]}
-    except (json.JSONDecodeError, KeyError, ValueError):
-        logger.warning("gate_signal parse error: %s", content[:200])
-        _log_ai_call("gate_signal", "parse_error_fallback", latency_ms,
-                     pair=pair, error="parse")
-        return FALLBACK
 
 
 # ── Deep layer: SMC+ICT session analysis ─────────────────────────────────────
