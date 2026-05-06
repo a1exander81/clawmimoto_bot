@@ -7,9 +7,11 @@ POSITIONS: list with share PNL
 """
 
 import asyncio
-# AI Soul: DeepSeek SMC+ICT scanner (replaces Groq/StepFun)
-# Note: ai_scan_pairs and call_stepfun_skill are defined locally in this module
-# to maintain backward compatibility with existing Groq-based implementation
+# AI Soul: DeepSeek SMC+ICT scanner via clawforge.ai_scan
+from clawforge.ai_scan import (
+    ai_scan_pairs,
+    call_ai_skill,
+)
 import base64
 import concurrent.futures
 import hashlib
@@ -161,7 +163,6 @@ BINGX_API_KEY = os.getenv("BINGX_API_KEY")
 BINGX_API_SECRET = os.getenv("BINGX_API_SECRET")
 BYBIT_API_KEY = os.getenv("BYBIT_API_KEY")
 BYBIT_API_SECRET = os.getenv("BYBIT_API_SECRET")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 SUPABASE_URL = os.getenv("SUPABASE_URL", "https://aauypnqsmyxzacchbiya.supabase.co")
 SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImFhdXlwbnFzbXl4emFjY2hiaXlhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzY5Nzg2MDUsImV4cCI6MjA5MjU1NDYwNX0.H8RbnYbUb55jr0RnOVpca2wkYgv_jKs8NuUHjruqWls")
 
@@ -441,7 +442,22 @@ def get_bybit_klines(symbol: str, interval: str = "5", limit: int = 50):
 
 # ── Single Pair Analyzer ──
 def analyze_pair(pair):
-    """Analyze a single pair (format 'BTC/USDT') and return result dict."""
+    """
+    Produce a scalp analysis for the given trading pair on the 5-minute timeframe.
+    
+    Parameters:
+        pair (str): Trading pair in the form "BASE/USDT" (e.g., "BTC/USDT").
+    
+    Returns:
+        result (dict): Analysis containing:
+            - symbol (str): The original pair string.
+            - direction (str): Suggested direction, either "LONG" or "SHORT".
+            - change (float): Percent price change between the last two 5m closes, rounded to two decimals.
+            - volume (float): Sum of recent volumes used in the analysis.
+            - confidence (int): Confidence score (0-100) for the suggested direction.
+            - reasons (list[str]): Up to three short textual reasons supporting the suggestion.
+            - current_price (float): Latest observed price used for the analysis.
+    """
     print(f"[DEBUG] analyze_pair called with: {pair}")
     symbol = pair.replace("/", "")
     klines_data = get_bybit_klines(symbol, interval="5", limit=50)
@@ -458,7 +474,7 @@ def analyze_pair(pair):
     if current_price <= 0:
         current_price, _ = get_binance_ticker(symbol)
     prompt = f"Scalp analysis for {pair} 5M: change {change:.2f}%, volume {volume:.0f}. Give: direction (LONG/SHORT), confidence 80-90%, RRR 1.5-3.0, 3 reasons."
-    ai_text = call_stepfun_skill(prompt)
+    ai_text = call_ai_skill(prompt)
     direction = "LONG" if change >= 0 else "SHORT"
     confidence = 85 if change >= 0 else 75
     reasons = ["High volume", "Momentum", "AI signal"]
@@ -947,7 +963,17 @@ def format_scan_result(ind, score, ob_ratio, funding):
 
 
 def get_bybit_top_movers(limit=20):
-    """Fetch top movers by volume from Bybit."""
+    """
+    Return Bybit USDT perpetual symbols with the highest 24h turnover.
+    
+    Filters results to symbols ending with "USDT", excludes symbols containing common stablecoin substrings (e.g., "USDC", "DAI", "BUSD", "TUSD"), and excludes symbols with a last price below $1. Results are sorted by 24h turnover and formatted as Freqtrade-style pair strings like "BASE/USDT:USDT". On error or if no suitable symbols are found, a small default list of major pairs is returned.
+    
+    Parameters:
+        limit (int): Maximum number of pairs to return.
+    
+    Returns:
+        list[str]: A list of formatted pair strings (e.g., "BTC/USDT:USDT").
+    """
     try:
         r = requests.get(
             "https://api.bybit.com/v5/market/tickers",
@@ -977,224 +1003,17 @@ def get_bybit_top_movers(limit=20):
         return ["BTC/USDT:USDT", "ETH/USDT:USDT", "SOL/USDT:USDT", "BNB/USDT:USDT"]
 
 
-def call_stepfun_skill(prompt, retries=2):
-    """AI scoring via Groq (llama-3.3-70b) — drop-in replacement for StepFun."""
-    import os
-    api_key = os.getenv("GROQ_API_KEY", "")
-    if not api_key:
-        logger.error("GROQ_API_KEY not set")
-        return None
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "model": "llama-3.1-8b-instant",
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-        "max_tokens": 500,
-    }
-    for attempt in range(retries):
-        try:
-            r = requests.post(
-                "https://api.groq.com/openai/v1/chat/completions",
-                json=payload, headers=headers, timeout=30
-            )
-            if r.status_code == 200:
-                return r.json()["choices"][0]["message"]["content"].strip()
-            logger.warning(f"Groq API error {r.status_code}: {r.text[:200]}")
-        except Exception as e:
-            logger.warning(f"Groq attempt {attempt+1} failed: {e}")
-    return None
-
-
-def ai_scan_pairs(custom_pairs=None, chat_id=None):
-    """
-    Enhanced Scan Logic:
-    1. Get top movers from Bybit (baseline: BTC ETH SOL BNB + top 3 extras)
-       Filters: turnover >$100M, price >$0.10, 4H move ±15%, volume spike >2× avg
-    2. For each, compute 1H/4H indicators (trend, volume ratio, ATR%, S/R)
-    3. Parallel StepFun scoring (top 8 candidates, 10s timeout, 1 retry)
-    4. Sort by AI score, take top 4
-    5. Enrich trade params (entry/SL/TP/sizing)
-    6. Return list of results
-    """
-    # STEP 1 — Get top movers
-    pairs_to_scan = custom_pairs if custom_pairs else get_bybit_top_movers(limit=20)
-    logger.info(f"ai_scan_pairs: scanning {len(pairs_to_scan)} top movers")
-    # Phase 1: Fetch indicators for all pairs (fast)
-    candidates = []
-    for pair in pairs_to_scan[:20]:
-        if "/" not in pair:
-            pair = f"{pair}/USDT"
-        ind = calculate_indicators(pair)
-        if not ind or ind.get("current_price", 0) <= 0:
-            logger.debug(f"Skipping {pair}: no indicator data")
-            continue
-        # Compute 4H change directly
-        pct_4h = ind.get("pct_4h", 0)
-        try:
-            bybit_sym = pair.replace("/", "").upper()
-            k4 = bybit_signed_request(
-                "GET", "/v5/market/kline",
-                params={"category": "linear", "symbol": bybit_sym, "interval": "240", "limit": 2},
-                timeout=5
-            )
-            if k4 and k4.get("retCode") == 0:
-                klist = k4.get("result", {}).get("list", [])
-                if len(klist) >= 2:
-                    open_4h = float(klist[-1][4])   # oldest close
-                    close_4h = float(klist[0][4])    # newest close
-                    pct_4h = (close_4h - open_4h) / open_4h * 100 if open_4h else 0
-        except Exception:
-            pass
-        candidates.append({
-            "symbol": pair,
-            "pct_4h": pct_4h,
-            "vol_ratio": ind.get("volume_ratio", 1),
-            "trend": ind.get("trend", "UNKNOWN"),
-            "atr_pct": ind.get("atr_pct", 0),
-            "current_price": ind.get("current_price", 0),
-            "support": ind.get("support"),
-            "resistance": ind.get("resistance"),
-        })
-    if not candidates:
-        logger.warning("No valid candidates after indicator fetch")
-        return []
-    # Phase 2: Pre-filter - remove unsafe pairs, rank by win potential
-    safe_candidates = []
-    for c in candidates:
-        # Skip if ATR too low (no movement)
-        if c.get("atr_pct", 0) < 0.3:
-            continue
-        # Skip if volume ratio too low (no interest)
-        if c.get("vol_ratio", 1) < 0.5:
-            continue
-        # Skip if price too low (pump risk)
-        if c.get("current_price", 0) < 1.0:
-            continue
-        # Win potential score: volume + momentum + volatility
-        vol_score = min(c.get("vol_ratio", 1) * 2, 4)
-        momentum_score = min(abs(c.get("pct_4h", 0)) * 0.5, 3)
-        atr_score = min(c.get("atr_pct", 0) * 0.5, 2)
-        trend_score = 1 if c.get("trend") in ["LONG","SHORT"] else 0
-        c["heuristic"] = vol_score + momentum_score + atr_score + trend_score
-        safe_candidates.append(c)
-    
-    if not safe_candidates:
-        safe_candidates = candidates  # fallback
-    
-    safe_candidates.sort(key=lambda x: x["heuristic"], reverse=True)
-    top_candidates = safe_candidates[:8]
-    logger.info(f"Selected {len(top_candidates)} candidates for StepFun ranking")
-    # Phase 3: Parallel StepFun scoring
-    def score_candidate(c):
-        prompt = (
-            f"Scalp analysis for {c['symbol']}:"
-            f" 4H move: {c['pct_4h']:.1f}%, Volume ratio: {c['vol_ratio']:.1f}x,"
-            f" Trend: {c['trend']}, ATR: {c['atr_pct']:.1f}%."
-            f" Rate 1-10 for scalping opportunity."
-            f" Give: score, direction (LONG/SHORT), confidence % (80-90), entry strategy (market/limit), key support/resistance levels."
-        )
-        ai_text = call_stepfun_skill(prompt, retries=1)
-        logger.info(f"StepFun raw: {str(ai_text)[:300]}")
-        score = 5
-        direction = "LONG" if c["pct_4h"] >= 0 else "SHORT"
-        confidence = max(80, min(89, int(85 + abs(c["pct_4h"])*0.5)))
-        entry_strategy = "market"
-        # Trend strength: normalize 4H move magnitude (5% move = 1.0)
-        trend_strength = min(1.0, abs(c["pct_4h"]) / 5)
-        reasons = ["Volume spike", "AI signal"]
-        if ai_text:
-            # Parse score — new multi-pattern for step-3.5-flash
-            patterns = [
-                r"score[\s:]*([1-9]|10)",
-                r"([1-9]|10)[\s]*/[\s]*10",
-                r"rating[\s:]*([1-9]|10)",
-                r"\b([1-9]|10)\b.*(?:out of|\/)\s*10",
-            ]
-            for pattern in patterns:
-                m = re.search(pattern, ai_text, re.IGNORECASE)
-                if m:
-                    score = int(m.group(1))
-                    break
-            # Parse direction
-            if "short" in ai_text.lower(): direction = "SHORT"
-            elif "long" in ai_text.lower(): direction = "LONG"
-            # Parse confidence
-            conf_patterns = [
-                r"confidence[\s:]+(\d{2,3})%?",
-                r"conf[\s:]+(\d{2,3})",
-                r"\b(\d{2,3})%\b",
-            ]
-            for pat in conf_patterns:
-                m = re.search(pat, ai_text, re.IGNORECASE)
-                if m:
-                    try:
-                        c_val = int(m.group(1))
-                        if 50 <= c_val <= 99:
-                            confidence = c_val
-                            break
-                    except: pass
-            # Parse entry strategy
-            if "limit" in ai_text.lower(): entry_strategy = "limit"
-            # Extract reasons (skip markdown headers, pick first 3 meaningful lines)
-            reasons = []
-            for line in ai_text.split("\n"):
-                line = line.strip("- *•").strip()
-                if line and len(line) > 5 and not line.startswith("**") and not line.startswith("_"):
-                    reasons.append(line)
-                if len(reasons) >= 3:
-                    break
-            if not reasons:
-                reasons = ["AI analysis", c["trend"], f"Vol {c['vol_ratio']:.1f}x"]
-        return {
-            "symbol": c["symbol"],
-            "direction": direction,
-            "change": round(c["pct_4h"], 2),
-            "volume_ratio": round(c["vol_ratio"], 2),
-            "confidence": confidence,
-            "reasons": reasons,
-            "current_price": c["current_price"],
-            "ai_score": score,
-            "entry_strategy": entry_strategy,
-            "atr_pct": c["atr_pct"],
-            "support": c.get("support"),
-            "resistance": c.get("resistance"),
-            "trend_strength": round(trend_strength, 2),
-        }
-    results = []
-    with concurrent.futures.ThreadPoolExecutor(max_workers=4) as executor:
-        future_to_c = {executor.submit(score_candidate, c): c for c in top_candidates}
-        for future in concurrent.futures.as_completed(future_to_c):
-            c = future_to_c[future]
-            try:
-                result = future.result(timeout=35)
-                if chat_id:
-                    result = enrich_trade_params(result, chat_id)
-                results.append(result)
-                logger.info(f"Scan {c['symbol']}: score={result['ai_score']}, dir={result['direction']}, conf={result['confidence']}")
-            except Exception as e:
-                logger.error(f"StepFun scoring failed for {c['symbol']}: {e}")
-                fallback = {
-                    "symbol": c["symbol"], "direction": "LONG" if c["pct_4h"]>=0 else "SHORT",
-                    "change": round(c["pct_4h"],2), "volume_ratio": round(c["vol_ratio"],2),
-                    "confidence": max(80, min(89, int(85+abs(c["pct_4h"])*0.5))),
-                    "reasons": ["Fallback"], "current_price": c["current_price"],
-                    "ai_score": 5, "entry_strategy": "market", "atr_pct": c["atr_pct"],
-                    "support": c.get("support"), "resistance": c.get("resistance"),
-                    "trend_strength": round(min(1.0, abs(c["pct_4h"]) / 5), 2),
-                }
-                if chat_id: fallback = enrich_trade_params(fallback, chat_id)
-                results.append(fallback)
-    results.sort(key=lambda x: x.get("ai_score", 0), reverse=True)
-    top4 = results[:4]
-    logger.info(f"ai_scan_pairs complete: returning {len(top4)} results")
-    return top4
-
-# ── Scan Execution & Logging ──
 async def log_trade_to_channel(bot, trade_data: dict, trade_id):
-    """Send executed trade notification to @RightclawTrade channel."""
+    """
+    Send a formatted notification about an executed trade to the configured channel.
+    
+    Formats a message from `trade_data` (expects keys like `symbol`, `direction`, `entry`, `sl`, `tp`, `confidence`, `ai_score`) and posts it to the channel specified by the `RIGHTCLAW_CHANNEL` environment variable (defaults to "@RightclawTrade"). Failures to deliver are logged.
+    
+    Parameters:
+        bot: Telegram bot/client used to send the message.
+        trade_data (dict): Trade details used to build the notification.
+        trade_id: Identifier for the executed trade (used for context).
+    """
     channel = os.getenv("RIGHTCLAW_CHANNEL", "@RightclawTrade")
     p = trade_data
     text = (
@@ -2352,6 +2171,15 @@ async def session_adjust_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await session_mode_cb(update, ctx)
 
 async def ai_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """
+    Start an AI market scan, save results to per-chat state, and update the UI based on the chat's trading mode.
+    
+    Performs an AI-driven market scan for the invoking chat, stores the selected pairs and scan results in user_state (including a back-context marker), and updates the originating callback message. If no high-conviction setups are found, replaces the message with an explanatory empty-state. In manual trading mode it removes the callback message and sends a detailed scan message; otherwise it edits the message to show a 2x2 grid of top pairs with refresh and back buttons.
+    
+    Parameters:
+        update (telegram.Update): The callback query update that triggered the scan.
+        ctx (ContextTypes.DEFAULT_TYPE): The handler context.
+    """
     if not await enforce_access(update, ctx, allow_whitelisted=True, require_channel=True):
         return
     q = update.callback_query
@@ -2362,11 +2190,25 @@ async def ai_scan_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     # Set back-context for pair detail
     user_state.setdefault(chat_id, {})
     user_state[chat_id]["pair_detail_back"] = "ai_scan"
-    await q.edit_message_text("🔍 **AI scanning market...**\n\nFetching Bybit movers, analyzing 5M charts, order book, sentiment...")
+    await q.edit_message_text("🔍 **AI is scanning the market...**\n\n_Analyzing charts, order book, sentiment_", parse_mode="Markdown")
     pairs = ai_scan_pairs(chat_id=chat_id)
     user_state[chat_id]["selected_pairs"] = pairs
     user_state.setdefault(chat_id, {})["scan_results"] = {p["symbol"]: p for p in pairs}
-    
+
+    # Empty-state: no high-conviction setups → show explanation, don't proceed to mode rendering
+    if not pairs:
+        try:
+            await q.edit_message_text(
+                "🔍 **No high-conviction setups right now**\n\n"
+                "DeepSeek requires 4+/5 confluence layers (structure, liquidity, kill zone, OTE/FVG, RSI+EMA+volume).\n\n"
+                "_Try again at the next session open or scan a custom pair._",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]]),
+            )
+        except Exception as e:
+            logger.warning(f"empty-state edit failed: {e}")
+        return
+
     # If in manual mode, use detailed scan format (send_scan_message style)
     if trading_mode == "manual":
         try:
@@ -2713,9 +2555,13 @@ async def more_opportunities_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
 
 
 def extract_pair_from_link(url: str):
-    """Extract trading pair symbol from exchange or TradingView links.
-    Supports: Bybit, Binance, BingX, TradingView, Twitter/X cashtags.
-    Returns formatted pair like "BTC/USDT" or None.
+    """
+    Extract a normalized trading pair identifier from a URL referencing crypto markets or discussions.
+    
+    Supports Bybit, Binance, BingX, TradingView symbol links, and Twitter/X posts (uses AI to infer pair from context). Returned pair uses the normalized Bybit-style format `BASE/USDT:USDT`.
+    
+    Returns:
+        str: The detected pair formatted as `BASE/USDT:USDT`, or `None` if no pair could be determined.
     """
     import re
     from urllib.parse import parse_qs, urlparse
@@ -2754,10 +2600,10 @@ def extract_pair_from_link(url: str):
             if m:
                 return f"{m.group(1)}/USDT:USDT"
 
-        # Twitter/X — ask StepFun to identify pair from URL context
+        # Twitter/X — ask AI to identify pair from URL context
         if "twitter.com" in domain or "x.com" in domain:
             prompt = f"This is a crypto Twitter/X URL: {url}\nWhat trading pair is being discussed? Reply with ONLY the Bybit perpetual pair symbol like BTC/USDT:USDT or UNKNOWN. No explanation."
-            ai_text = call_stepfun_skill(prompt, retries=1)
+            ai_text = call_ai_skill(prompt, retries=1)
             if ai_text and "UNKNOWN" not in ai_text.upper():
                 m = re.search(r"([A-Z]{2,10})/USDT", ai_text.upper())
                 if m:
@@ -3828,7 +3674,15 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 # ── Scan Command ──
 async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Handle /scan command: run AI scan asynchronously and send results."""
+    """
+    Run an AI market scan in the background and deliver results to the chat.
+    
+    Performs access checks, clears any stale scan cache for the chat, acknowledges the request with a status message, then schedules an asynchronous AI scan. When the scan completes successfully, stores the discovered setups in `user_state[chat_id]["selected_pairs"]` and sends the formatted scan results to the chat; on failure or if no setups are found, updates the status message with an appropriate notification or error summary.
+    
+    Parameters:
+        update (telegram.Update): Incoming Telegram update for the /scan command.
+        context (telegram.ext.ContextTypes.DEFAULT_TYPE): Handler context providing bot and user state.
+    """
     if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
         return
     chat_id = update.effective_chat.id
@@ -3837,11 +3691,16 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         user_state[chat_id].pop("scan_results", None)
     # Acknowledge immediately
     status_msg = await update.message.reply_text(
-        "🔍 **Scanning market...**\n\nFetching Bybit hot pairs, analyzing 5M charts, order book, sentiment...",
+        "🔍 **AI is scanning the market...**\n\n_Analyzing charts, order book, sentiment_",
         parse_mode="Markdown"
     )
 
     async def do_scan():
+        """
+        Run an AI-powered market scan and deliver results to the chat.
+        
+        Performs the scan in a background executor, stores found setups in user_state[chat_id]["selected_pairs"], deletes or updates the intermediate status message, and sends the formatted scan results to the chat. If no setups are found, updates the status message with a "no high-conviction setups" notice. On unexpected errors, logs the exception and attempts to update the status message with a truncated error description.
+        """
         try:
             # Run blocking scan in executor to avoid blocking event loop
             loop = asyncio.get_event_loop()
@@ -3849,7 +3708,7 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             if not setups:
                 try:
-                    await status_msg.edit_text("❌ **Scan failed** - No pairs returned.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
+                    await status_msg.edit_text("🔍 **No high-conviction setups right now**\n\nDeepSeek requires 4+/5 confluence layers (structure, liquidity, kill zone, OTE/FVG, RSI+EMA+volume).\n\n_Try again at the next session open or scan a custom pair._", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
                 except: pass
                 return
             user_state[chat_id]["selected_pairs"] = setups
@@ -3868,7 +3727,11 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     asyncio.create_task(do_scan())
 
 async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Re-run scan and update message (async)."""
+    """
+    Refresh the AI market scan for the invoking chat and update the originating Telegram message.
+    
+    Clears any cached scan results for the chat, schedules a background scan task that fetches fresh setups, stores successful results in user_state[chat_id]["selected_pairs"], deletes the original callback message when possible, and sends an updated scan message. If no setups are found or an error occurs, edits the original message with an explanatory or retry/back UI. Access control (whitelist/channel) is enforced before any work is performed.
+    """
     if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
         return
     query = update.callback_query
@@ -3879,6 +3742,11 @@ async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TY
         user_state[chat_id].pop("scan_results", None)
 
     async def do_refresh():
+        """
+        Refreshes the AI scan for the current chat and updates the Telegram UI with the results.
+        
+        Runs an AI-driven scan, stores found setups into the chat's state under `selected_pairs`, deletes the originating message when appropriate, and sends the formatted scan results to the chat. If no high-conviction setups are found, edits the UI to inform the user and provide a BACK option. On error, logs the failure and attempts to update the UI with a short failure message and retry/back actions.
+        """
         try:
             # Run blocking scan in executor
             loop = asyncio.get_event_loop()
@@ -3886,7 +3754,7 @@ async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TY
 
             if not setups:
                 try:
-                    await query.edit_message_text("❌ **Scan failed** - No pairs returned.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]]))
+                    await query.edit_message_text("🔍 **No high-conviction setups right now**\n\nDeepSeek requires 4+/5 confluence layers (structure, liquidity, kill zone, OTE/FVG, RSI+EMA+volume).\n\n_Try again at the next session open or scan a custom pair._", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]]))
                 except: pass
                 return
             user_state[chat_id]["selected_pairs"] = setups
