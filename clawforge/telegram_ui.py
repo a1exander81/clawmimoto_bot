@@ -13,7 +13,6 @@ from clawforge.ai_scan import (
     call_ai_skill,
 )
 import base64
-import concurrent.futures
 import hashlib
 import hmac
 import json
@@ -1050,7 +1049,8 @@ def save_position(trade_data: dict, trade_id):
             with open(path, "r+", encoding="utf-8") as f:
                 data = json.load(f)
                 data.append(entry)
-                f.seek(0); f.truncate()
+                f.seek(0)
+                f.truncate()
                 json.dump(data, f, indent=2)
         else:
             with open(path, "w", encoding="utf-8") as f:
@@ -1444,8 +1444,8 @@ async def show_stats_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     q = update.callback_query
     await q.answer()
-    w, l, wr, pnl = get_stats()
-    text = f"📊 **Statistics**\n\nWin/Loss: {w}/{l} ({wr:.0f}%)\nRealized PNL: ${pnl:,.2f}"
+    w, losses, wr, pnl = get_stats()
+    text = f"📊 **Statistics**\n\nWin/Loss: {w}/{losses} ({wr:.0f}%)\nRealized PNL: ${pnl:,.2f}"
     await q.edit_message_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ Back", callback_data="main")]]))
 
 async def show_gains_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
@@ -1887,8 +1887,6 @@ def execute_clawstrike(pair: str, p: dict):
     No approval needed — all conditions already met.
     """
     try:
-        chat_id = int(os.getenv("TELEGRAM_CHAT_ID"))
-
         # Calculate leverage (max for ClawStrike)
         confidence = p.get("confidence", 88)
         trend_strength = p.get("trend_strength", 0.8)
@@ -1995,7 +1993,7 @@ async def market_now_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         source = None
         # 1. Try Bybit
         try:
-            ticker = bybit_signed_request("GET", "/v5/market/tickers", params={"category": "linear", "symbol": bybit_sym})
+            ticker = bybit_signed_request("GET", "/v5/market/tickers", params={"category": "linear", "symbol": binance_sym})
             if ticker and ticker.get("retCode") == 0:
                 d = ticker["result"]["list"][0]
                 price = float(d.get("lastPrice", 0))
@@ -2246,7 +2244,8 @@ async def pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         try:
             symbol_clean = p["symbol"].replace("/", "")
             cur_price, _ = get_binance_ticker(symbol_clean)
-        except: pass
+        except Exception:
+            pass
     # Enriched trade params
     entry = p.get("entry", cur_price or 0)
     sl = p.get("sl", 0)
@@ -2333,7 +2332,8 @@ async def select_pair_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
             try:
                 symbol_clean = result["symbol"].replace("/", "")
                 cur_price, _ = get_binance_ticker(symbol_clean)
-            except: pass
+            except Exception:
+                pass
         # Build detailed text
         entry = result.get("entry", cur_price or 0)
         sl = result.get("sl", 0)
@@ -2445,8 +2445,6 @@ async def more_opportunities_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         return
     q = update.callback_query
     await q.answer()
-    chat_id = q.message.chat_id
-
     # Show loading message
     await q.edit_message_text("📊 **Scanning opportunities...**", parse_mode="Markdown")
 
@@ -2563,7 +2561,6 @@ def extract_pair_from_link(url: str):
     Returns:
         str: The detected pair formatted as `BASE/USDT:USDT`, or `None` if no pair could be determined.
     """
-    import re
     from urllib.parse import parse_qs, urlparse
     url = url.strip()
     try:
@@ -2576,7 +2573,6 @@ def extract_pair_from_link(url: str):
             m = re.search(r"/([A-Z]{2,10})(USDT|USDC|BTC|ETH)", path)
             if m:
                 base = m.group(1)
-                quote = m.group(2)
                 # Normalize quote to USDT for consistency
                 return f"{base}/USDT:USDT"
 
@@ -2744,7 +2740,8 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 ticker_price, _ = get_binance_ticker(symbol_clean)
                 if ticker_price and ticker_price > 0:
                     cur_price = ticker_price
-            except: pass
+            except Exception:
+                pass
             # Enriched trade params (already enriched)
             entry = result.get("entry", cur_price or 0)
             sl = result.get("sl", 0)
@@ -2826,7 +2823,8 @@ async def text_input_handler(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
                 ticker_price, _ = get_binance_ticker(symbol_clean)
                 if ticker_price and ticker_price > 0:
                     cur_price = ticker_price
-            except: pass
+            except Exception:
+                pass
             # Enriched trade params (already enriched)
             entry = result.get("entry", cur_price or 0)
             sl = result.get("sl", 0)
@@ -3196,7 +3194,6 @@ async def share_pnl_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
         await q.edit_message_text("❌ Trade not found.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="positions")]]))
         return
     # Generate card (placeholder - use PnL card generator when ready)
-    card_path = f"generated-cards/pnl_{trade_id}.png"
     # TODO: generate image with Pillow
     text = (f"📈 **PnL Share**\n\n"
             f"{t['pair']} {t.get('direction','LONG')}\n"
@@ -3381,8 +3378,6 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
         return
-    chat_id = update.effective_chat.id
-
     # Gather process info
     lines = ["📊 **Bot Status**\n"]
 
@@ -3453,7 +3448,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             dt = datetime.strptime(ts_str, "%a %b %d %H:%M:%S %z %Y")
                             last_ts = dt
                             break
-                        except:
+                        except Exception:
                             continue
                 if last_ts and (time.time() - last_ts.timestamp()) < 120:
                     lines.append("❌ **Freqtrade** — DOWN (watchdog restarting...)")
@@ -3492,7 +3487,7 @@ async def watch_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             dt = datetime.strptime(ts_str, "%a %b %d %H:%M:%S %z %Y")
                             last_ts = dt
                             break
-                        except:
+                        except Exception:
                             continue
                 if last_ts and (time.time() - last_ts.timestamp()) < 120:
                     lines.append("❌ **Telegram Bot** — DOWN (watchdog restarting...)")
@@ -3536,7 +3531,6 @@ async def profit_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
         return
-    chat_id = update.effective_chat.id
     lines = ["💰 **Profit Summary**\n"]
 
     try:
@@ -3604,7 +3598,6 @@ async def daily_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """
     if not await enforce_access(update, context, allow_whitelisted=True, require_channel=True):
         return
-    chat_id = update.effective_chat.id
     lines = ["📅 **Daily Trading Summary**\n"]
 
     try:
@@ -3709,19 +3702,22 @@ async def scan_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if not setups:
                 try:
                     await status_msg.edit_text("🔍 **No high-conviction setups right now**\n\nDeepSeek requires 4+/5 confluence layers (structure, liquidity, kill zone, OTE/FVG, RSI+EMA+volume).\n\n_Try again at the next session open or scan a custom pair._", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
-                except: pass
+                except Exception:
+                    pass
                 return
             user_state[chat_id]["selected_pairs"] = setups
             # Delete status and send results (ignore if already deleted)
             try:
                 await status_msg.delete()
-            except: pass
+            except Exception:
+                pass
             await send_scan_message(chat_id, setups, context)
         except Exception as e:
             logger.error(f"Scan error: {e}", exc_info=True)
             try:
                 await status_msg.edit_text(f"❌ **Scan error**: {str(e)[:100]}", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ MAIN", callback_data="main")]]))
-            except: pass
+            except Exception:
+                pass
 
     # Schedule scan (allows immediate response to /scan)
     asyncio.create_task(do_scan())
@@ -3755,12 +3751,14 @@ async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TY
             if not setups:
                 try:
                     await query.edit_message_text("🔍 **No high-conviction setups right now**\n\nDeepSeek requires 4+/5 confluence layers (structure, liquidity, kill zone, OTE/FVG, RSI+EMA+volume).\n\n_Try again at the next session open or scan a custom pair._", parse_mode="Markdown", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("⬅️ BACK", callback_data="ai_scan")]]))
-                except: pass
+                except Exception:
+                    pass
                 return
             user_state[chat_id]["selected_pairs"] = setups
             try:
                 await query.message.delete()
-            except: pass
+            except Exception:
+                pass
             await send_scan_message(chat_id, setups, context)
         except Exception as e:
             logger.error(f"Refresh scan error: {e}", exc_info=True)
@@ -3772,7 +3770,8 @@ async def refresh_scan_callback(update: Update, context: ContextTypes.DEFAULT_TY
                         [InlineKeyboardButton("⬅️ BACK", callback_data="session_mode")]
                     ])
                 )
-            except: pass
+            except Exception:
+                pass
     asyncio.create_task(do_refresh())
 
 async def send_scan_message(chat_id, setups, context):
@@ -3971,7 +3970,8 @@ async def set_commands(app: Application) -> None:
             await asyncio.sleep(3)
             try:
                 await app.bot.delete_message(chat_id=admin_id, message_id=msg.message_id)
-            except: pass
+            except Exception:
+                pass
         asyncio.create_task(delete_later())
     except Exception as e:
         logger.debug(f"Startup notification failed: {e}")
@@ -4011,7 +4011,8 @@ async def refresh_pair_detail_cb(update: Update, ctx: ContextTypes.DEFAULT_TYPE)
             try:
                 symbol_clean = result["symbol"].replace("/", "")
                 cur_price, _ = get_binance_ticker(symbol_clean)
-            except: pass
+            except Exception:
+                pass
         entry = result.get("entry", cur_price or 0)
         sl = result.get("sl", 0)
         tp = result.get("tp", 0)
