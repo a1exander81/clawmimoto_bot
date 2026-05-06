@@ -2,8 +2,26 @@
 
 import json
 import logging
+import time
 
 logger = logging.getLogger(__name__)
+
+
+def _log_ai_call(function: str, outcome: str, latency_ms: float,
+                 *, pair: str | None = None, error: str | None = None,
+                 **extras) -> None:
+    """Structured INFO log for AI calls. Format: ai_call k=v k=v ..."""
+    parts = [f"function={function}"]
+    if pair is not None:
+        parts.append(f"pair={pair}")
+    parts.append(f"outcome={outcome}")
+    parts.append(f"latency_ms={int(latency_ms)}")
+    if error is not None:
+        parts.append(f"error={error}")
+    for k, v in extras.items():
+        parts.append(f"{k}={v}")
+    logger.info("ai_call %s", " ".join(parts))
+
 
 # ── Constants ──
 VALID_SESSIONS = ["LONDON_OPEN_KZ", "LONDON_NY_KZ", "NY_CLOSE_KZ"]
@@ -105,22 +123,31 @@ def gate_signal(pair: str, session: str, rsi: float,
         f"\"confidence\": 0.0-1.0, \"reason\": \"one line\"}}"
     )
 
+    t0 = time.monotonic()
     content = _call_deepseek(
         [{"role": "user", "content": prompt}],
         model=FAST_MODEL, timeout=FAST_TIMEOUT,
     )
+    latency_ms = (time.monotonic() - t0) * 1000
     if not content:
+        _log_ai_call("gate_signal", "fallback_confirm", latency_ms,
+                     pair=pair, error="no_response")
         return FALLBACK
     try:
         result = json.loads(content)
         decision = result.get("decision", "CONFIRM").upper()
         if decision not in ("CONFIRM", "REJECT", "HOLD"):
             decision = "CONFIRM"
+        confidence = float(result.get("confidence", 0.5))
+        _log_ai_call("gate_signal", decision.lower(), latency_ms,
+                     pair=pair, confidence=f"{confidence:.2f}")
         return {"decision": decision,
-                "confidence": float(result.get("confidence", 0.5)),
+                "confidence": confidence,
                 "reason": str(result.get("reason", ""))[:200]}
     except (json.JSONDecodeError, KeyError, ValueError):
         logger.warning("gate_signal parse error: %s", content[:200])
+        _log_ai_call("gate_signal", "parse_error_fallback", latency_ms,
+                     pair=pair, error="parse")
         return FALLBACK
 
 
@@ -163,12 +190,17 @@ def analyze_session(pairs: list, session: str,
         f'"reasoning": "2-3 sentences"}}}}'
     )
 
+    t0 = time.monotonic()
     content = _call_deepseek(
         [{"role": "user", "content": prompt}],
         model=DEEP_MODEL, timeout=DEEP_TIMEOUT,
     )
+    latency_ms = (time.monotonic() - t0) * 1000
+    pair_count = len(pairs)
     if not content:
         logger.warning("analyze_session: no response")
+        _log_ai_call("analyze_session", "fallback_neutral", latency_ms,
+                     error="no_response", pairs=pair_count)
         return {
             _normalize_bybit_symbol(p): {
                 "bias": "NEUTRAL", "confidence": 0.0,
@@ -176,9 +208,14 @@ def analyze_session(pairs: list, session: str,
             } for p in pairs
         }
     try:
-        return json.loads(content)
+        parsed = json.loads(content)
+        _log_ai_call("analyze_session", "success", latency_ms,
+                     pairs=pair_count, returned=len(parsed))
+        return parsed
     except json.JSONDecodeError:
         logger.error("analyze_session parse error: %s", content[:300])
+        _log_ai_call("analyze_session", "parse_error_empty", latency_ms,
+                     error="parse", pairs=pair_count)
         return {}
 
 
