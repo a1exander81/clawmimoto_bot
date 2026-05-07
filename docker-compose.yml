@@ -56,6 +56,9 @@ services:
       - ./generated:/app/generated
       - ./scripts:/app/scripts
       - ./data:/app/data
+      - ./config:/app/config
+      - ./grid_layer:/app/grid_layer
+      - ./unified_ui:/app/unified_ui
     environment:
       - BYBIT_API_KEY=${BYBIT_API_KEY}
       - BYBIT_API_SECRET=${BYBIT_API_SECRET}
@@ -64,6 +67,12 @@ services:
       - GROQ_API_KEY=${GROQ_API_KEY}
       - SUPABASE_URL=${SUPABASE_URL}
       - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY}
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - DEEPSEEK_BASE_URL=${DEEPSEEK_BASE_URL}
+      - DEEPSEEK_MODEL=${DEEPSEEK_MODEL}
+      - DEEPSEEK_TIMEOUT=${DEEPSEEK_TIMEOUT}
+      - DEEPSEEK_CONFIDENCE_THRESHOLD=${DEEPSEEK_CONFIDENCE_THRESHOLD}
+      - DEEPSEEK_MIN_RRR=${DEEPSEEK_MIN_RRR}
       - FREQTRADE_API_URL=http://freqtrade:8080
       - TZ=Asia/Singapore
     logging:
@@ -78,7 +87,6 @@ services:
       retries: 3
       start_period: 30s
     command: python -m clawforge.telegram_ui
-
 networks:
   claw-isolation:
     driver: bridge
