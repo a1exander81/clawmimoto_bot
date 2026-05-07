@@ -148,13 +148,19 @@ def analyze_session(pairs: list, session: str,
                 "reasoning": "AI unavailable",
             } for p in pairs
         }
+    cleaned = content.strip()
+    if cleaned.startswith("```"):
+        first_newline = cleaned.find("\n")
+        if first_newline != -1:
+            cleaned = cleaned[first_newline:]
+        cleaned = cleaned.replace("```", "").strip()
     try:
-        parsed = json.loads(content)
+        parsed = json.loads(cleaned)
         _log_ai_call("analyze_session", "success", latency_ms,
                      pairs=pair_count, returned=len(parsed))
         return parsed
     except json.JSONDecodeError:
-        logger.error("analyze_session parse error: %s", content[:300])
+        logger.error("analyze_session parse error: %s", cleaned[:2000])
         _log_ai_call("analyze_session", "parse_error_empty", latency_ms,
                      error="parse", pairs=pair_count)
         return {}
