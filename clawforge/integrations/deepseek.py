@@ -50,7 +50,7 @@ def _get_env_config() -> tuple[str, str, float]:
 
 def _call_deepseek(
     messages: list[dict[str, str]],
-    model: str = "deepseek-v4-pro",
+    model: str = "deepseek-v4-flash",
     retries: int = DEFAULT_RETRIES,
 ) -> str | None:
     """Call DeepSeek Chat via REST API with exponential-backoff retry.

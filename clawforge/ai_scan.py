@@ -26,11 +26,31 @@ def _log_ai_call(function: str, outcome: str, latency_ms: float,
 # ── Constants ──
 DEFAULT_PAIRS = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "BNB/USDT"]
 
-# DeepSeek model configuration
-FAST_MODEL = "deepseek-chat"
-FAST_TIMEOUT = 10.0
-DEEP_MODEL = "deepseek-reasoner"
-DEEP_TIMEOUT = 30.0
+
+def _env_float(key: str, default: float) -> float:
+    """Read a float env var; fall back to default on missing or unparseable."""
+    import os
+    try:
+        return float(os.getenv(key, str(default)))
+    except (TypeError, ValueError):
+        return default
+
+
+# DeepSeek model configuration (env-driven; defaults are post-July-2026 safe).
+# deepseek-v4-flash is the documented replacement for legacy deepseek-chat
+# and deepseek-reasoner aliases (deprecated 2026-07-24). BYOK overrides
+# arrive via these env vars per-tenant when that lands.
+import os as _os
+
+FAST_MODEL = _os.getenv("DEEPSEEK_MODEL_FAST", "deepseek-v4-flash")
+FAST_TIMEOUT = _env_float("DEEPSEEK_FAST_TIMEOUT", 10.0)
+DEEP_MODEL = _os.getenv("DEEPSEEK_MODEL_DEEP", "deepseek-v4-flash")
+DEEP_TIMEOUT = _env_float("DEEPSEEK_DEEP_TIMEOUT", 30.0)
+
+# Filter thresholds (0-100 scale in env for human readability,
+# converted to 0-1 internally for comparison against model output).
+CONFIDENCE_THRESHOLD = _env_float("DEEPSEEK_CONFIDENCE_THRESHOLD", 65.0) / 100.0
+MIN_RRR = _env_float("DEEPSEEK_MIN_RRR", 2.0)
 
 
 # ── Helper functions (imported at runtime to avoid circular deps) ──
@@ -203,7 +223,7 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None,
         bias = analysis.get("bias", "NEUTRAL")
         confidence = float(analysis.get("confidence", 0.0))
 
-        if bias == "NEUTRAL" or confidence < 0.65:
+        if bias == "NEUTRAL" or confidence < CONFIDENCE_THRESHOLD:
             logger.info("Skip %s — %s %.0f%%", pair, bias, confidence * 100)
             continue
 
@@ -231,6 +251,10 @@ def ai_scan_pairs(custom_pairs=None, chat_id=None,
                 tp_price = key_levels.get("support", price * 0.98)
 
         rrr = abs((tp_price - price) / (price - sl_price)) if (price - sl_price) != 0 else 0.0
+
+        if rrr < MIN_RRR:
+            logger.info("Skip %s — RRR %.2f below min %.2f", pair, rrr, MIN_RRR)
+            continue
 
         results.append({
             # New schema fields
